@@ -18,7 +18,7 @@ from pdwx.climate import Climate
 from pdwx import config, style
 from pdwx.style import delta, rain as rain_text
 from pdwx.term import Terminal
-from pdwx.ui import parse_date, rank_phrase
+from pdwx.ui import parse_date, rank_detail, rank_phrase
 
 
 def daily(start: date, days: int, hi, lo, rain=0.0) -> dict:
@@ -75,6 +75,13 @@ class ClimateTests(unittest.TestCase):
         hot = climate(31.0)
         kinds = [(a.date, k) for a, k, _ in hot.alerts()]
         self.assertIn((TODAY, "hottest"), kinds)
+
+    def test_rank_detail_names_the_years(self):
+        c = climate(25.0)
+        self.assertEqual(rank_detail(c, TODAY, 25.0), ("only 2013 (30.0°) was warmer", "behind 2013"))
+        self.assertEqual(rank_detail(c, TODAY, 31.0), ("beating 30.0° in 2013", "beating 2013"))
+        self.assertEqual(rank_detail(c, TODAY, 30.0), ("tying 30.0° in 2013", "tying 2013"))
+        self.assertEqual(rank_detail(c, TODAY, 21.5), ("", ""))  # middling: no note
 
     def test_last_time_and_similar(self):
         c = climate(25.0)

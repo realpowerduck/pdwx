@@ -16,7 +16,7 @@ from .climate import BASE_YEARS, Climate, Day, Normal
 from .style import UNITS, Palette, day_month, deg, deg1, delta, full_date, icon, icon_colour, ordinal, rain_value, temp
 from .style import rain as rain_text
 from .views import Views
-from .term import RGB, Canvas, clip, ink_for
+from .term import RGB, Canvas, clip, ink_for, text_width
 from .weather_data import RateLimited, cached_extras, load_current_year, load_extras, load_forecast
 
 if TYPE_CHECKING:
@@ -92,6 +92,27 @@ def rank_phrase(clim: Climate, d: date, high: float) -> str:
         return f"{ordinal(cool)} coolest {label} in {total} years"
     share = round(100 * (cool - 1) / (total - 1))
     return f"warmer than {share}% of years on {label}"
+
+
+def rank_detail(clim: Climate, d: date, high: float) -> tuple[str, str]:
+    """(long, short) note naming the years that beat a top-4 day, or the year it beat."""
+    warm, cool, total = clim.rank(d, high)
+    if total < 5 or min(warm, cool) > 4:
+        return "", ""
+    hot = warm <= cool
+    rows = sorted((r for r in clim.same_date(d) if r.hi is not None), key=lambda r: r.hi, reverse=hot)
+    if min(warm, cool) == 1:
+        if not rows:
+            return "", ""
+        best = rows[0]
+        verb = "tying" if deg1(best.hi) == deg1(high) else "beating"
+        return f"{verb} {deg1(best.hi)} in {best.date.year}", f"{verb} {best.date.year}"
+    beaten = rows[: min(warm, cool) - 1]
+    names = [str(r.date.year) for r in beaten]
+    listed = [f"{r.date.year} ({deg1(r.hi)})" for r in beaten]
+    join = lambda xs: xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]  # noqa: E731
+    word = "warmer" if hot else "cooler"
+    return f"only {join(listed)} {'was' if len(beaten) == 1 else 'were'} {word}", f"behind {join(names)}"
 
 
 class WeatherUI(Views):
@@ -284,7 +305,13 @@ class WeatherUI(Views):
                     (delta(dv), pal.anomaly(dv), True),
                     (f" {word} normal" if word != "near" else " normal", pal.muted, False),
                 ]
-            parts += [("   ", None, False), (self._rank_text(d, day), pal.title, False)]
+            rank = self._rank_text(d, day)
+            parts += [("   ", None, False), (rank, pal.title, False)]
+            used = sum(text_width(t) for t, _, _ in parts) + 1
+            for note in rank_detail(clim, d, day.hi) if rank else ():  # type: ignore[arg-type]
+                if note and used + text_width(f" · {note}") <= c.w - 2:
+                    parts += [(" · ", pal.dim, False), (note, pal.muted, False)]
+                    break
         elif normal:
             parts += [
                 ("   normally ", pal.muted, False),
