@@ -91,8 +91,10 @@ def rank_phrase(clim: Climate, d: date, high: float, dated: bool = True) -> str:
         return f"{ordinal(warm)} warmest{label} in {total} years"
     if cool <= 10:
         return f"{ordinal(cool)} coolest{label} in {total} years"
-    share = round(100 * (cool - 1) / (total - 1))
-    return f"warmer than {share}% of years" + (f" on{label}" if dated else "")
+    # say it from the majority side: "cooler than 57%", never "warmer than 41%"
+    warmer_than, cooler_than = cool - 1, warm - 1
+    word, count = ("warmer", warmer_than) if warmer_than >= cooler_than else ("cooler", cooler_than)
+    return f"{word} than {round(100 * count / (total - 1))}% of years" + (f" on{label}" if dated else "")
 
 
 def rank_detail(clim: Climate, d: date, high: float) -> tuple[str, str]:

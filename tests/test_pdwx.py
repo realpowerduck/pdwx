@@ -76,6 +76,11 @@ class ClimateTests(unittest.TestCase):
         kinds = [(a.date, k) for a, k, _ in hot.alerts()]
         self.assertIn((TODAY, "hottest"), kinds)
 
+    def test_middling_days_are_described_from_the_majority_side(self):
+        c = climate()  # 86 other years on 26 Sep: highs 18–22° by year % 5, and 30° in 2013
+        self.assertEqual(rank_phrase(c, TODAY, 21.5), "warmer than 79% of years on 26 Sep")
+        self.assertEqual(rank_phrase(c, TODAY, 18.5, dated=False), "cooler than 79% of years")
+
     def test_rank_detail_names_the_years(self):
         c = climate(25.0)
         self.assertEqual(rank_detail(c, TODAY, 25.0), ("only 2013 (30.0°) was warmer", "behind 2013"))
