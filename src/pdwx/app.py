@@ -237,9 +237,13 @@ class App:
                     head, _, rest = place.label.partition(",")
                     x = c.put(row, 3, "● " if is_saved else "  ", pal.accent if is_saved else pal.dim, bg)
                     x = c.put(row, x, head, pal.text, bg, bold=chosen)
-                    x = c.put(row, x, ("," + rest) if rest else "", pal.muted, bg, width=c.w - x - 22)
-                    coords = f"{place.latitude:.2f}, {place.longitude:.2f}"
-                    c.put(row, c.w - 3 - len(coords), coords, pal.dim, bg)
+                    # narrow: the region matters more than the coordinates
+                    x = c.put(
+                        row, x, ("," + rest) if rest else "", pal.muted, bg, width=c.w - x - (3 if c.compact else 22)
+                    )
+                    if not c.compact:
+                        coords = f"{place.latitude:.2f}, {place.longitude:.2f}"
+                        c.put(row, c.w - 3 - len(coords), coords, pal.dim, bg)
                     row += 1
                 if message and len(key_q) >= 2:
                     c.put(c.h - 2, 3, message, pal.dim, width=c.w - 6)
@@ -361,8 +365,11 @@ class App:
                 bg = pal.select if chosen else None
                 c.put(y, 3, "Home place", pal.text if chosen else pal.muted, bg, bold=chosen)
                 if home:
-                    x = c.put(y, 18, home.label, pal.text, bg, width=c.w - 40)
-                    c.put(y, x + 2, "opens when you run pdwx", pal.dim, bg)
+                    hint = "opens when you run pdwx"
+                    fits = 18 + text_width(home.label) + 2 + len(hint) <= c.w - 2
+                    x = c.put(y, 18, home.label, pal.text, bg, width=c.w - 20)
+                    if fits:
+                        c.put(y, x + 2, hint, pal.dim, bg)
                 else:
                     c.put(y, 18, "none: pdwx asks each time" + ("   Enter to choose" if chosen else ""), pal.dim, bg)
                 y += 2

@@ -12,7 +12,7 @@ from .style import day_month, deg, deg1, delta, delta1, full_date, icon_colour, 
 from .style import rain as rain_text
 from .style import snow as snow_text
 from .style import wind as wind_text
-from .term import RGB, Canvas, clip, ink_for, mix
+from .term import RGB, Canvas, clip, ink_for, mix, text_width
 from .weather_data import condition
 
 
@@ -55,7 +55,7 @@ class Views:
         y = top + 1
         gap = 2 if not others and bottom - top >= 30 else 1
         for d in dates:
-            label = "Today" if d == self.today else f"{d:%a} {d.day}"
+            label = "Today" if d == self.today else f"{d:%a}"[: 2 if c.compact else 3] + f" {d.day}"
             day = clim.day(d)
             note = wind_text(day.wind) if day and day.wind is not None else ""
             self._row(
@@ -76,7 +76,7 @@ class Views:
                 self._row(
                     c,
                     y,
-                    "  " + self.compare[0].short[:6],
+                    self.compare[0].short[:5] if c.compact else "  " + self.compare[0].short[:6],
                     others.day(d),
                     others.normal(d),
                     axis,  # type: ignore[index]
@@ -102,8 +102,12 @@ class Views:
         avail = c.w - 4
         cell = max(1, avail // n)
         x0 = 2
-        c.put(y, x0, "Last 30 days and the forecast", pal.muted)
-        c.put(y, x0 + 30, "· daily mean vs normal", pal.dim)
+        self._fit(
+            c,
+            y,
+            x0,
+            [[("Last 30 days and the forecast", pal.muted, False)], [(" · daily mean vs normal", pal.dim, False)]],
+        )
         legend_x = x0 + n * cell - 22
         if legend_x > x0 + 56:
             lx = c.put(y, legend_x, "cooler ", pal.dim)
@@ -159,16 +163,20 @@ class Views:
             return
         similar = clim.similar(day, 5)
         if similar:
-            parts: list[tuple[str, RGB | None, bool]] = [("Days most like this one  ", pal.dim, False)]
+            groups: list[list[tuple[str, RGB | None, bool]]] = [
+                [("Most like it" if c.compact else "Days most like this one", pal.dim, False)]
+            ]
             for s in similar:
-                parts += [
-                    (full_date(s.date) + " ", pal.muted, False),
-                    (deg(s.hi), pal.temp(s.hi), False),  # type: ignore[arg-type]
-                    ("/", pal.dim, False),
-                    (deg(s.lo), pal.temp(s.lo), False),
-                    ("   ", None, False),
-                ]  # type: ignore[arg-type]
-            self._parts(c, y, 2, parts)
+                groups.append(
+                    [
+                        ("   " if len(groups) > 1 or not c.compact else "  ", None, False),
+                        (full_date(s.date) + " ", pal.muted, False),
+                        (deg(s.hi), pal.temp(s.hi), False),  # type: ignore[arg-type]
+                        ("/", pal.dim, False),
+                        (deg(s.lo), pal.temp(s.lo), False),  # type: ignore[arg-type]
+                    ]
+                )
+            self._fit(c, y, 2, groups)
 
     # ── month calendar ────────────────────────────────────────────────
     def _draw_month(self, c: Canvas, top: int, bottom: int) -> None:
@@ -179,11 +187,13 @@ class Views:
         avail = bottom - top - 2
         ch = 4 if avail >= len(weeks) * 4 else 3 if avail >= len(weeks) * 3 else 2
         cw = max(8, min(16, (c.w - 2) // 7))
+        narrow = cw < 10  # too narrow for both high and low: show the high, the low is in the headline
         gx = max(1, (c.w - cw * 7) // 2)
         title = f"{calendar.month_name[month]} {year}"
         c.put(top, gx, title, pal.title, bold=True)
         legend = "cell colour: high vs normal" if self.metric == "temp" else "cell colour: rain"
-        c.put(top, gx + cw * 7 - len(legend) - 1, legend, pal.dim)
+        if len(title) + len(legend) + 4 <= cw * 7:
+            c.put(top, gx + cw * 7 - len(legend) - 1, legend, pal.dim)
         names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
         for i, name in enumerate(names[first:] + names[:first]):
             c.put(top + 1, gx + i * cw + 1, name, pal.dim)
@@ -212,7 +222,7 @@ class Views:
                     c.put(y, x + 1, num, pal.accent if d == self.today else pal.text, fill, bold=True)
                 if d == self.today and not chosen:
                     c.put(y, x + 3, "•", pal.accent, fill)
-                if day and day.src != "H" and (ch >= 3 or inner >= 11):
+                if day and day.src != "H" and (ch >= 3 or inner >= 11) and not narrow:
                     c.put(y, x + inner - 2, day.src, pal.green if day.src == "F" else pal.dim, fill)
                 if ch == 2:
                     value = (
@@ -220,32 +230,35 @@ class Views:
                         if day
                         else (deg(normal.hi) if normal and self.metric == "temp" else "")
                     )
+                    vx = max(x + 4, x + inner - text_width(value)) if narrow else x + 5
                     c.put(
                         y,
-                        x + 5,
+                        vx,
                         value,
                         (ink_for(fill) if fill else pal.text) if day else pal.dim,
                         fill,
                         bold=bool(day),
-                        width=inner - 5,
+                        width=x + inner - vx,
                     )
                 if ch >= 3:
                     if self.metric == "temp":
                         if day:
                             xx = c.put(y + 1, x + 1, deg(day.hi), ink_for(fill) if fill else pal.text, fill, bold=True)
-                            c.put(
-                                y + 1,
-                                xx + 1,
-                                deg(day.lo),
-                                mix(ink_for(fill) if fill else pal.text, fill or pal.bg, 0.35),
-                                fill,
-                            )
+                            if not narrow:  # the low is in the headline for the selected day
+                                c.put(
+                                    y + 1,
+                                    xx + 1,
+                                    deg(day.lo),
+                                    mix(ink_for(fill) if fill else pal.text, fill or pal.bg, 0.35),
+                                    fill,
+                                )
                         elif normal:
-                            c.put(y + 1, x + 1, f"{deg(normal.hi)} {deg(normal.lo)}", pal.dim, fill)
+                            text = deg(normal.hi) if narrow else f"{deg(normal.hi)} {deg(normal.lo)}"
+                            c.put(y + 1, x + 1, text, pal.dim, fill)
                         if ch >= 4 and day and normal:
                             c.put(y + 2, x + 1, delta(day.hi - normal.hi), ink_for(fill) if fill else pal.text, fill)  # type: ignore[operator]
                         elif ch >= 4 and normal and not day:
-                            c.put(y + 2, x + 1, "normal", pal.dim, fill)
+                            c.put(y + 2, x + 1, "norm" if narrow else "normal", pal.dim, fill)
                     else:
                         if day:
                             c.put(
@@ -261,9 +274,10 @@ class Views:
                             )
         y = y0 + len(weeks) * ch
         if y < bottom:
-            self._parts(c, y, gx, self._month_summary(year, month))
+            self._fit(c, y, gx, self._month_summary(year, month))
 
-    def _month_summary(self, year: int, month: int) -> list[tuple[str, RGB | None, bool]]:
+    def _month_summary(self, year: int, month: int) -> list[list[tuple[str, RGB | None, bool]]]:
+        """Highs and rain against normal, as phrases that are dropped whole when space runs out."""
         pal, clim = self.pal, self.clim
         days = [clim.day(date(year, month, dn)) for dn in range(1, calendar.monthrange(year, month)[1] + 1)]
         have = [(dd, clim.normal(dd.date)) for dd in days if dd]
@@ -274,9 +288,11 @@ class Views:
             if not normals:
                 return []
             return [
-                (f"Normal {name}: ", pal.dim, False),
-                (f"{deg(mean(n.hi for n in normals))}/{deg(mean(n.lo for n in normals))}", pal.muted, False),
-                (f" · {rain_text(sum(n.rain for n in normals))} of rain", pal.muted, False),
+                [
+                    (f"Normal {name}: ", pal.dim, False),
+                    (f"{deg(mean(n.hi for n in normals))}/{deg(mean(n.lo for n in normals))}", pal.muted, False),
+                ],
+                [(f" · {rain_text(sum(n.rain for n in normals))} of rain", pal.muted, False)],
             ]
         mean_dev = sum(dd.hi - n.hi for dd, n in have if n) / len(have)  # type: ignore[operator]
         rain = sum(dd.rain or 0 for dd, _ in have)
@@ -284,11 +300,13 @@ class Views:
         full = len(have) == len(days)
         lead = f"{name} {year}" + ("" if full else " so far")
         return [
-            (lead + ": highs ", pal.dim, False),
-            (delta(mean_dev), pal.anomaly(mean_dev), True),
-            (" vs normal · rain ", pal.dim, False),
-            (rain_text(rain), pal.rain, True),
-            (f" (normal {rain_text(normal_rain)}{'' if full else ' by now'})", pal.dim, False),
+            [
+                (lead + ": highs ", pal.dim, False),
+                (delta(mean_dev), pal.anomaly(mean_dev), True),
+                (" vs normal", pal.dim, False),
+            ],
+            [(" · rain ", pal.dim, False), (rain_text(rain), pal.rain, True)],
+            [(f" (normal {rain_text(normal_rain)}{'' if full else ' by now'})", pal.dim, False)],
         ]
 
     # ── month chart ───────────────────────────────────────────────────
@@ -326,7 +344,7 @@ class Views:
         self.chart_scroll = max(0, min(self.chart_scroll, n - visible))
         y = top + 1
         for d in dates[self.chart_scroll : self.chart_scroll + visible]:
-            label = f"{d.day:>2} {d:%a}"
+            label = f"{d.day:>2} {d:%a}"[: 5 if c.compact else 6]
             self._row(
                 c,
                 y,
@@ -340,7 +358,7 @@ class Views:
             )
             y += 1
         if y < bottom:
-            self._parts(c, y, 2, self._month_summary(year, month))
+            self._fit(c, y, 2, self._month_summary(year, month))
 
     # ── years for one date ────────────────────────────────────────────
     def _years_rows(self) -> list[Day]:
@@ -360,29 +378,35 @@ class Views:
             return
         self.years_index = max(0, min(self.years_index, len(rows) - 1))
         rec = clim.records(self.sel)
-        parts: list[tuple[str, RGB | None, bool]] = [
-            (f"{day_month(self.sel)} across {len(rows)} years", pal.title, True)
+        groups: list[list[tuple[str, RGB | None, bool]]] = [
+            [(f"{day_month(self.sel)} across {len(rows)} years", pal.title, True)]
         ]
         if rec["hi"]:
-            parts += [
-                ("   hottest ", pal.dim, False),
-                (deg1(rec["hi"].hi), pal.temp(rec["hi"].hi), False),  # type: ignore[arg-type]
-                (f" {rec['hi'].date.year}", pal.muted, False),
-            ]
+            groups.append(
+                [
+                    ("   hottest ", pal.dim, False),
+                    (deg1(rec["hi"].hi), pal.temp(rec["hi"].hi), False),  # type: ignore[arg-type]
+                    (f" {rec['hi'].date.year}", pal.muted, False),
+                ]
+            )
         if rec["lo"]:
-            parts += [
-                ("   coldest night ", pal.dim, False),
-                (deg1(rec["lo"].lo), pal.temp(rec["lo"].lo), False),  # type: ignore[arg-type]
-                (f" {rec['lo'].date.year}", pal.muted, False),
-            ]
+            groups.append(
+                [
+                    ("   coldest night ", pal.dim, False),
+                    (deg1(rec["lo"].lo), pal.temp(rec["lo"].lo), False),  # type: ignore[arg-type]
+                    (f" {rec['lo'].date.year}", pal.muted, False),
+                ]
+            )
         if rec["wet"] and (rec["wet"].rain or 0) >= 0.1:
-            parts += [
-                ("   wettest ", pal.dim, False),
-                (rain_text(rec["wet"].rain), pal.rain, False),
-                (f" {rec['wet'].date.year}", pal.muted, False),
-            ]
-        parts += [("   sorted by " + ("value" if self.years_sort else "year"), pal.dim, False)]
-        self._parts(c, top, 2, parts)
+            groups.append(
+                [
+                    ("   wettest ", pal.dim, False),
+                    (rain_text(rec["wet"].rain), pal.rain, False),
+                    (f" {rec['wet'].date.year}", pal.muted, False),
+                ]
+            )
+        groups.append([("   sorted by " + ("value" if self.years_sort else "year"), pal.dim, False)])
+        self._fit(c, top, 2, groups)
         normal = clim.normal(self.sel)
         lows = [r.lo for r in rows] + ([normal.lo] if normal else [])
         highs = [r.hi for r in rows] + ([normal.hi] if normal else [])
@@ -465,7 +489,7 @@ class Views:
         if day.snow:
             lines.append(("Snow", snow_text(day.snow), pal.text, "", pal.dim))
         if day.feels is None and day.src == "H" and not self._extras_complete():
-            lines.append(("", "", pal.dim, "Sun, wind and humidity are still downloading", pal.dim))
+            lines.append(("", "", pal.dim, "Sun, wind, humidity still loading", pal.dim))
         for label, value, vc, note, nc in lines:
             if y >= bottom:
                 return
@@ -476,16 +500,11 @@ class Views:
         warm, cool, total = clim.rank(d, day.hi)  # type: ignore[arg-type]
         lwarm, lcool, _ = clim.rank(d, day.lo, "lo")  # type: ignore[arg-type]
         y += 1
-        if y < bottom:
-            c.put(
-                y,
-                x,
-                f"On {day_month(d)} since {clim.first_year}, this high ranks {ordinal(warm)} warmest and this "
-                f"low {ordinal(lwarm)} warmest of {total} years.",
-                pal.muted,
-                width=c.w - 4,
-            )
-        y += 2
+        sentence = (
+            f"On {day_month(d)} since {clim.first_year}, this high ranks {ordinal(warm)} warmest and this "
+            f"low {ordinal(lwarm)} warmest of {total} years."
+        )
+        y = self._wrap(c, y, x, sentence, pal.muted, bottom) + 1
         if y + 3 >= bottom:
             return
         c.put(y, x, f"The week around it, {d.year}", pal.title, bold=True)
@@ -497,7 +516,8 @@ class Views:
         for s in span:
             if y >= bottom:
                 break
-            self._row(c, y, f"{s:%a} {s.day}", clim.day(s), clim.normal(s), axis, self._rain_top([0]), s == d)
+            label = f"{s:%a}"[: 2 if c.compact else 3] + f" {s.day}"
+            self._row(c, y, label, clim.day(s), clim.normal(s), axis, self._rain_top([0]), s == d)
             y += 1
 
     # ── climate ───────────────────────────────────────────────────────
@@ -536,18 +556,21 @@ class Views:
 
     def _heading(
         self, c: Canvas, y: int, title: str, subtitle: str, note: str = "", note_colour: RGB | None = None
-    ) -> None:
-        """Title, then the note on the right; the grey subtitle only if both still fit."""
+    ) -> int:
+        """Title, then the note on the right; the grey subtitle only if both still fit. Returns the next row."""
         x = c.put(y, 2, title, self.pal.title, bold=True)
+        if c.compact and note and x + 3 + len(note) > c.w - 2:
+            c.put(y + 1, 2, clip(note, c.w - 4), note_colour or self.pal.muted, bold=note_colour is not None)
+            return y + 2
         right = c.w - len(note) - 2
         if note and right > x + 2:
             c.put(y, right, note, note_colour or self.pal.muted, bold=note_colour is not None)
         elif note:
-            right = c.w
             c.put(y, x + 3, clip(note, c.w - x - 4), note_colour or self.pal.muted)
-            return
+            return y + 1
         if subtitle and x + 3 + len(subtitle) < right - 2:
             c.put(y, x + 3, subtitle, self.pal.dim)
+        return y + 1
 
     def _draw_climate(self, c: Canvas, top: int, bottom: int) -> None:
         pal, clim = self.pal, self.clim
@@ -565,10 +588,10 @@ class Views:
                 label, dv = change
                 txt = f"Recent years are {delta1(dv)} {'warmer' if dv >= 0 else 'cooler'} than {label}"
                 colour = pal.anomaly(dv * 4)
-            self._heading(
+            y = self._heading(
                 c, y, f"Every year since {annual[0][0]}", "average temperature, one stripe per year", txt, colour
             )
-            y = self._stripes(c, y + 1, 5 if tall else 3, annual) + 1
+            y = self._stripes(c, y, 5 if tall else 3, annual) + 1
         # month stripes
         if monthly and bottom - y > 6:
             change = Climate.change(monthly)
@@ -577,8 +600,8 @@ class Views:
                 label, dv = change
                 txt = f"{mname}s are {delta1(dv)} {'warmer' if dv >= 0 else 'cooler'} than in {label}"
                 colour = pal.anomaly(dv * 4)
-            self._heading(c, y, f"{mname} only", "←→ changes month", txt, colour)
-            y = self._stripes(c, y + 1, 4 if tall else 2, monthly) + 1
+            y = self._heading(c, y, f"{mname} only", "←→ changes month", txt, colour)
+            y = self._stripes(c, y, 4 if tall else 2, monthly) + 1
         # decades of the month
         if monthly and bottom - y > 5:
             decades = Climate.decade_means(monthly)
@@ -589,7 +612,9 @@ class Views:
             for dec, t, _rain in decades:
                 cell = f" {dec}s {deg1(t)} "
                 if x + len(cell) > c.w - 2:
-                    break
+                    if not c.compact or y + 2 >= bottom:
+                        break
+                    x, y = 2, y + 1
                 bgc = pal.anomaly_bg((t - base_t) * 4, 0.8)
                 c.put(y, x, cell, ink_for(bgc), bgc)
                 x += len(cell) + 1
@@ -598,8 +623,16 @@ class Views:
         if bottom - y > 4:
             thr = clim.hot_threshold()
             hot = clim.hot_days_by_decade(thr)
-            c.put(y, 2, "Hot days a year", pal.muted, bold=True)
-            c.put(y, 18, f"above {deg(thr)}, the hottest 5% of {BASE_YEARS[0]}–{BASE_YEARS[1]} days", pal.dim)
+            x = c.put(y, 2, "Hot days a year", pal.muted, bold=True)
+            self._fit(
+                c,
+                y,
+                x + 2,
+                [
+                    [(f"above {deg(thr)}", pal.dim, False)],
+                    [(f", the hottest 5% of {BASE_YEARS[0]}–{BASE_YEARS[1]} days", pal.dim, False)],
+                ],
+            )
             y += 1
             if hot:
                 peak = max(v for _, v in hot) or 1
@@ -608,7 +641,9 @@ class Views:
                     bar = "▁▂▃▄▅▆▇█"[min(7, int(v / peak * 7.99))]
                     cell = f"{dec}s {bar} {v:.0f}  "
                     if x + len(cell) > c.w - 2:
-                        break
+                        if not c.compact or y + 2 >= bottom:
+                            break
+                        x, y = 2, y + 1
                     x = c.put(y, x, f"{dec}s ", pal.dim)
                     x = c.put(y, x, bar, pal.temp(thr), bold=True)
                     x = c.put(y, x, f" {v:.0f}  ", pal.text)
@@ -623,16 +658,25 @@ class Views:
                 word = (
                     f"{abs(shift)} days {'earlier' if shift > 0 else 'later'}" if abs(shift) >= 3 else "about the same"
                 )
-                self._parts(
+                self._fit(
                     c,
                     y,
                     2,
                     [
-                        ("First hot day of the season: ", pal.dim, False),
-                        (f"{a_dec}s ~{day_month(da)}", pal.muted, False),
-                        ("  →  ", pal.dim, False),
-                        (f"{b_dec}s ~{day_month(db)}", pal.text, True),
-                        (f"   ({word})", pal.red if shift >= 3 else pal.dim, False),
+                        [
+                            ("First hot day" if c.compact else "First hot day of the season: ", pal.dim, False),
+                            (": " if c.compact else "", pal.dim, False),
+                            (f"{a_dec}s ~{day_month(da)}", pal.muted, False),
+                            (" → " if c.compact else "  →  ", pal.dim, False),
+                            (f"{b_dec}s ~{day_month(db)}", pal.text, True),
+                        ],
+                        [
+                            (
+                                f"   ({word})" if not c.compact else f" ({word})",
+                                pal.red if shift >= 3 else pal.dim,
+                                False,
+                            )
+                        ],
                     ],
                 )
                 y += 1
@@ -642,24 +686,27 @@ class Views:
             wettest = max(annual, key=lambda s: s[2])
             driest = min(annual, key=lambda s: s[2])
             txt = f"Driest {driest[0]} {rain_text(driest[2])} · wettest {wettest[0]} {rain_text(wettest[2])}"
-            self._heading(c, y, "Rain every year", "yellow drier, blue wetter than normal", txt)
-            y = self._stripes(c, y + 1, 3 if tall else 2, annual, rain=True) + 1
+            y = self._heading(c, y, "Rain every year", "yellow drier, blue wetter than normal", txt)
+            y = self._stripes(c, y, 3 if tall else 2, annual, rain=True) + 1
         # dry spells
         if bottom - y > 1:
             spells = clim.dry_spells()
-            parts = [(f"Dry spells (under {rain_text(1.0)})  ", pal.muted, True)]
+            groups: list[list[tuple[str, RGB | None, bool]]] = [
+                [("Dry spells" if c.compact else f"Dry spells (under {rain_text(1.0)})", pal.muted, True)]
+            ]
             ever, this_year, current = spells["ever"], spells["year"], spells["current"]
             if ever:
-                parts += [
-                    ("longest ", pal.dim, False),
-                    (f"{ever[2]} days", pal.yellow, True),
-                    (f" ({day_month(ever[0])} – {full_date(ever[1])})", pal.dim, False),
-                ]
+                groups.append([("  longest ", pal.dim, False), (f"{ever[2]} days", pal.yellow, True)])
+                groups.append([(f" ({day_month(ever[0])} – {full_date(ever[1])})", pal.dim, False)])
             if this_year:
-                parts += [("   this year ", pal.dim, False), (f"{this_year[2]} days", pal.text, False)]
+                groups.append([("   this year ", pal.dim, False), (f"{this_year[2]} days", pal.text, False)])
             if current and current[2] > 1:
-                parts += [("   now ", pal.dim, False), (f"{current[2]} dry days running", pal.text, False)]
-            self._parts(c, y, 2, parts)
+                groups.append([("   now ", pal.dim, False), (f"{current[2]} dry days running", pal.text, False)])
+            if c.compact and len(groups) > 3 and y + 1 < bottom:  # dates on the first line, this year and now below
+                self._fit(c, y, 2, groups[:3])
+                self._fit(c, y + 1, 1, groups[3:])
+            else:
+                self._fit(c, y, 2, groups)
 
     # ── heatmap ───────────────────────────────────────────────────────
     def _draw_heatmap(self, c: Canvas, top: int, bottom: int) -> None:
@@ -670,15 +717,8 @@ class Views:
         width = c.w - lx - 2
         cols = min(width, 366)
         per = 366 / cols
-        self._parts(
-            c,
-            top,
-            2,
-            [
-                ("Every day since " + str(years[0]), pal.title, True),
-                ("   daily mean temperature vs normal · two years per row", pal.dim, False),
-            ],
-        )
+        subtitle = "   daily mean vs normal" if c.compact else "   daily mean temperature vs normal · two years per row"
+        self._fit(c, top, 2, [[("Every day since " + str(years[0]), pal.title, True)], [(subtitle, pal.dim, False)]])
         lgx = c.w - 30
         if lgx > 70:
             x = c.put(top, lgx, "colder ", pal.dim)
@@ -744,14 +784,17 @@ class Views:
                 devs.append(day.mid - normal.mid)  # type: ignore[operator]
         if devs:
             mean_dev = sum(devs) / len(devs)
-            self._parts(
+            key = "   ▸ upper  ▹ lower half" if c.compact else "   ▸ upper half of a row  ▹ lower half"
+            self._fit(
                 c,
                 summary_y,
                 2,
                 [
-                    (f"{calendar.month_name[m]} {self.heat_year}: ", pal.text, True),
-                    (delta(mean_dev), pal.anomaly(mean_dev), True),
-                    (" vs normal (daily mean)", pal.dim, False),
-                    ("   ▸ upper half of a row  ▹ lower half", pal.dim, False),
+                    [
+                        (f"{calendar.month_name[m]} {self.heat_year}: ", pal.text, True),
+                        (delta(mean_dev), pal.anomaly(mean_dev), True),
+                        (" vs normal" if c.compact else " vs normal (daily mean)", pal.dim, False),
+                    ],
+                    [(key, pal.dim, False)],
                 ],
             )

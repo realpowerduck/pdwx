@@ -19,7 +19,7 @@
 
 ## Install
 
-Linux or macOS. Windows is not supported: pdwx reads the terminal directly using Unix-only interfaces.
+Linux or macOS. Windows is not supported: pdwx reads the terminal directly using Unix-only interfaces. Any terminal from 60×20 up works; below 90 columns pdwx switches to a condensed layout.
 
 ```sh
 uv tool install git+https://github.com/realpowerduck/pdwx
@@ -75,7 +75,7 @@ Weather data by [Open-Meteo.com](https://open-meteo.com/) under [CC BY 4.0](http
 
 ```sh
 uv tool install --editable .
-python -m unittest discover -s tests     # 19 tests, including every screen drawn at four terminal sizes
+python -m unittest discover -s tests     # 26 tests, including every screen drawn at five terminal sizes
 uvx ruff check src tests && uvx ruff format --check src tests
 ```
 

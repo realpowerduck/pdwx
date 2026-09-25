@@ -348,9 +348,13 @@ class Terminal:
 Cell = tuple[str, "RGB | None", "RGB | None", bool]
 
 
+COMPACT_W = 90  # narrower than this, views switch to their condensed layouts
+
+
 class Canvas:
     def __init__(self, height: int, width: int):
         self.h, self.w = height, width
+        self.compact = width < COMPACT_W
         blank: Cell = (" ", None, None, False)
         self.cells: list[list[Cell]] = [[blank] * width for _ in range(height)]
 

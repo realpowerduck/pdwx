@@ -7,6 +7,7 @@ import contextlib
 import math
 import queue
 import re
+import textwrap
 import threading
 import time
 from datetime import date, timedelta
@@ -76,22 +77,22 @@ def _shift_year(d: date, years: int) -> date:
         return date(d.year + years, 2, 28)
 
 
-def rank_phrase(clim: Climate, d: date, high: float) -> str:
+def rank_phrase(clim: Climate, d: date, high: float, dated: bool = True) -> str:
     """How this high ranks against the same calendar date in every other year."""
     warm, cool, total = clim.rank(d, high)
     if total < 5:
         return ""
-    label = day_month(d)
+    label = f" {day_month(d)}" if dated else ""
     if warm == 1:
-        return f"warmest {label} in {total} years"
+        return f"warmest{label} in {total} years"
     if cool == 1:
-        return f"coolest {label} in {total} years"
+        return f"coolest{label} in {total} years"
     if warm <= 10:
-        return f"{ordinal(warm)} warmest {label} in {total} years"
+        return f"{ordinal(warm)} warmest{label} in {total} years"
     if cool <= 10:
-        return f"{ordinal(cool)} coolest {label} in {total} years"
+        return f"{ordinal(cool)} coolest{label} in {total} years"
     share = round(100 * (cool - 1) / (total - 1))
-    return f"warmer than {share}% of years on {label}"
+    return f"warmer than {share}% of years" + (f" on{label}" if dated else "")
 
 
 def rank_detail(clim: Climate, d: date, high: float) -> tuple[str, str]:
@@ -136,6 +137,7 @@ class WeatherUI(Views):
         self.heat_year = self.today.year
         self.compare: tuple[Any, Climate] | None = None
         self.help = False
+        self.help_scroll = 0
         self.jobs: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.status = " · ".join(loaded.notes)
         self.status_colour: RGB | None = self.pal.yellow if loaded.notes else None
@@ -235,7 +237,8 @@ class WeatherUI(Views):
         self._header(c)
         top = 2
         if self.drill or self.view in ("week", "month", "chart"):
-            top = self._headline(c, 2, self.detail if self.drill == "detail" and self.detail else self.sel)
+            d = self.detail if self.drill == "detail" and self.detail else self.sel
+            top = (self._headline_compact if c.compact else self._headline)(c, 2, d)
         bottom = c.h - 2
         if self.drill == "years":
             self._draw_years(c, top, bottom)
@@ -243,13 +246,28 @@ class WeatherUI(Views):
             self._draw_detail(c, top, bottom)
         else:
             getattr(self, f"_draw_{self.view}")(c, top, bottom)
-        self.app.footer(c, self._hints(), self.status, self.status_colour)
+        self.app.footer(c, self._hints(c.compact), self.status, self.status_colour)
         if self.help:
             self._draw_help(c)
 
     # ── chrome ─────────────────────────────────────────────────────────
     def _header(self, c: Canvas) -> None:
         pal = self.pal
+        if c.compact:
+            # place on the left; the view's name and a dot per view on the right
+            dx = c.w - 2 * len(VIEWS)
+            for i, v in enumerate(VIEWS):
+                c.put(0, dx + 2 * i, "●" if v == self.view else "○", pal.accent if v == self.view else pal.dim)
+            label = LABELS[self.view]
+            lx = dx - 2 - len(label)
+            c.put(0, lx, label, pal.accent, bold=True)
+            x = self.app.brand(c) + 2
+            head = self.place.label.partition(",")[0]
+            x = c.put(0, x, head, pal.text, bold=True, width=max(0, lx - x - 2))
+            if self.compare:
+                x = c.put(0, x, " vs ", pal.dim, width=max(0, lx - x - 2))
+                c.put(0, x, self.compare[0].short, pal.magenta, bold=True, width=max(0, lx - x - 2))
+            return
         tabs = [LABELS[v] for v in VIEWS]
         tabs_w = sum(len(t) + 3 for t in tabs)
         show_tabs = c.w >= tabs_w + 30
@@ -281,6 +299,26 @@ class WeatherUI(Views):
                 break
             x = c.put(y, x, text, colour, bold=bold, width=limit - x)
         return x
+
+    def _fit(
+        self, c: Canvas, y: int, x: int, groups: list[list[tuple[str, RGB | None, bool]]], limit: int | None = None
+    ) -> int:
+        """Draw whole groups of parts left to right, stopping before the first that would be cut."""
+        limit = c.w - 1 if limit is None else limit
+        for group in groups:
+            if x + sum(text_width(t) for t, _, _ in group) > limit:
+                break
+            x = self._parts(c, y, x, group, limit)
+        return x
+
+    def _wrap(self, c: Canvas, y: int, x: int, text: str, colour: RGB | None, bottom: int) -> int:
+        """Word-wrapped text from x to the right edge; returns the row after it."""
+        for line in textwrap.wrap(text, max(10, c.w - x - 2)):
+            if y >= bottom:
+                break
+            c.put(y, x, line, colour)
+            y += 1
+        return y
 
     def _headline(self, c: Canvas, y: int, d: date) -> int:
         pal, clim = self.pal, self.clim
@@ -370,12 +408,108 @@ class WeatherUI(Views):
             c.put(y + 2, 1, clip(text, c.w - 2), colour, bold=True)
         return y + 4
 
+    def _headline_compact(self, c: Canvas, y: int, d: date) -> int:
+        """The headline stacked on three lines: the day and its temperatures, how unusual, the context."""
+        pal, clim = self.pal, self.clim
+        day, normal = clim.day(d), clim.normal(d)
+        when = "Today" if d == self.today else "Tomorrow" if d == self.today + timedelta(days=1) else f"{d:%A}"
+        x = 1
+        if day:
+            x = c.put(y, x, icon(day.code) + "  ", icon_colour(pal, day.code))
+        title = f"{when} {day_month(d)}" + (f" {d.year}" if d.year != self.today.year else "")
+        c.put(y, x, title, pal.text, bold=True)
+        if day:
+            temps = [
+                (deg(day.hi), pal.temp(day.hi), True),
+                (" / ", pal.dim, False),
+                (deg(day.lo), pal.temp(day.lo), False),
+            ]
+        elif normal:
+            temps = [("normally ", pal.dim, False), (f"{deg(normal.hi)} / {deg(normal.lo)}", pal.muted, False)]
+        else:
+            temps = []
+        self._parts(c, y, c.w - 2 - sum(text_width(t) for t, _, _ in temps), temps)  # type: ignore[arg-type]
+        # how unusual
+        line: list[list[tuple[str, RGB | None, bool]]] = []
+        if day and normal:
+            dv = day.hi - normal.hi  # type: ignore[operator]
+            word = " above normal" if dv >= 0.5 else " below normal" if dv <= -0.5 else " normal"
+            line.append([(delta(dv), pal.anomaly(dv), True), (word, pal.muted, False)])
+        rank = rank_phrase(clim, d, day.hi, dated=False) if day else ""  # type: ignore[arg-type]
+        if rank:
+            line.append([(" · " if line else "", pal.dim, False), (rank, pal.title, False)])
+            used = x + sum(text_width(t) for g in line for t, _, _ in g)
+            for note in rank_detail(clim, d, day.hi):  # type: ignore[arg-type,union-attr]
+                if note and used + text_width(f" · {note}") <= c.w - 2:
+                    line.append([(" · ", pal.dim, False), (note, pal.muted, False)])
+                    break
+        self._fit(c, y + 1, x, line)
+        # context, whole phrases only
+        ctx: list[list[tuple[str, RGB | None, bool]]] = []
+        if normal:
+            ctx.append([("Normal ", pal.dim, False), (f"{deg(normal.hi)}/{deg(normal.lo)}", pal.muted, False)])
+        rec = clim.records(d)
+        if rec["hi"]:
+            ctx.append(
+                [
+                    ("Record ", pal.dim, False),
+                    (deg1(rec["hi"].hi), pal.temp(rec["hi"].hi), False),  # type: ignore[arg-type]
+                    (f" {rec['hi'].date.year}", pal.muted, False),
+                ]
+            )
+        if day and day.src != "H":
+            ctx.append([(SOURCE[day.src], pal.green if day.src == "F" else pal.dim, False)])
+        elif not day and d > self.today:
+            ctx.append([("beyond the forecast", pal.dim, False)])
+        if self.compare and (other := self.compare[1].day(d)):
+            ctx.append(
+                [
+                    (f"{self.compare[0].short} ", pal.magenta, False),
+                    (f"{deg(other.hi)}/{deg(other.lo)}", pal.muted, False),
+                ]
+            )
+        if day and normal and abs(day.hi - normal.hi) >= 3:  # type: ignore[operator]
+            warm = day.hi >= normal.hi  # type: ignore[operator]
+            last = clim.last_time(d, day.hi, warm)  # type: ignore[arg-type]
+            word = "warm" if warm else "cool"
+            if last:
+                ctx.append([(f"last this {word} ", pal.dim, False), (full_date(last.date), pal.muted, False)])
+            else:
+                ctx.append([(f"never this {word} since {clim.first_year}", pal.title, False)])
+        joined = [g if i == 0 else [(" · ", pal.dim, False), *g] for i, g in enumerate(ctx)]
+        self._fit(c, y + 2, x, joined)
+        alerts = clim.alerts()
+        if not alerts:
+            return y + 4
+        day_a, kind, rec_day = alerts[0]
+        attr = "hi" if kind in ("hottest", "coldest day") else "lo"
+        value, old = getattr(day_a, attr), getattr(rec_day, attr)
+        verb = "ties" if round(value, 1) == round(old, 1) else "beats"
+        colour = pal.red if kind in ("hottest", "warmest night") else pal.blue
+        when_a = f"{day_a.date:%a} {day_month(day_a.date)}"
+        text = f"▲ {when_a} {deg(value)} {verb} the {kind} ({deg1(old)}, {rec_day.date.year})"
+        if len(alerts) > 1:
+            text += f" +{len(alerts) - 1}"
+        c.put(y + 3, x, clip(text, c.w - x - 1), colour, bold=True)
+        return y + 5
+
     def _rank_text(self, d: date, day: Day) -> str:
         return rank_phrase(self.clim, d, day.hi)  # type: ignore[arg-type]
 
-    def _hints(self) -> list[tuple[str, str]]:
+    def _hints(self, compact: bool = False) -> list[tuple[str, str]]:
         if self.help:
-            return [("?", "close help")]
+            return [("↑↓", "scroll"), ("?", "close help")] if compact else [("?", "close help")]
+        if compact:
+            short = {
+                "years": [("↑↓", "year"), ("Enter", "that day"), ("Esc", "back")],
+                "detail": [("↑↓", "year"), ("←→", "day"), ("Esc", "back")],
+                "week": [("↑↓", "day"), ("Enter", "history")],
+                "month": [("←→↑↓", "day"), ("Enter", "history")],
+                "chart": [("↑↓", "day"), ("Enter", "history")],
+                "climate": [("←→", "month"), ("Tab", "view")],
+                "heatmap": [("↑↓", "year"), ("Enter", "open")],
+            }
+            return short[self.drill or self.view] + [("?", "help")]
         if self.drill == "years":
             return [
                 ("↑↓", "year"),
@@ -512,6 +646,8 @@ class WeatherUI(Views):
     def _layout(c: Canvas, note_w: int = 0) -> tuple[int, int, bool]:
         """Rail start, rail width, and whether the note column fits; shared by ticks and rows."""
         show_note = bool(note_w) and c.w >= 100
+        if c.compact:  # short label, no source tag, badge and rain only
+            return 10, max(10, c.w - 10 - 12 - 1), False
         rx = 16
         right = 14 + (note_w + 2 if show_note else 0)
         return rx, max(10, c.w - rx - right - 1), show_note
@@ -538,26 +674,33 @@ class WeatherUI(Views):
         if selected:
             c.fill(y, 0, c.w, pal.select)
             c.put(y, 0, "▌", pal.accent, pal.select)
-        lw = 10
+        rx, width, show_note = self._layout(c, note_w)
+        lw = rx - 4 if c.compact else 10  # compact: a 5-wide label, then the icon
         colour = label_colour or (pal.text if day else pal.dim)
         c.put(y, 2, label, colour, bg, bold=selected and not sub, width=lw - 1)
-        if day and day.src != "H":
+        if day and day.src != "H" and not c.compact:
             c.put(y, 2 + lw - 1, day.src, pal.green if day.src == "F" else pal.dim, bg)
-        c.put(y, 2 + lw + 1, icon(day.code) if day else " ", icon_colour(pal, day.code if day else None), bg)
-        rx, width, show_note = self._layout(c, note_w)
+        c.put(
+            y,
+            rx - 2 if c.compact else 2 + lw + 1,
+            icon(day.code) if day else " ",
+            icon_colour(pal, day.code if day else None),
+            bg,
+        )
         if self.metric == "temp":
             self._rail(c, y, rx, width, axis, day.lo if day else None, day.hi if day else None, normal, bg)
-            bx = rx + width + 2
+            bx = rx + width + (1 if c.compact else 2)
             if day and normal:
                 dv = day.hi - normal.hi  # type: ignore[operator]
                 c.put(y, bx, delta(dv).rjust(4), pal.anomaly(dv), bg, bold=abs(dv) >= 3)
             elif normal:
                 c.put(y, bx, "norm", pal.dim, bg)
-            if day:
-                c.put(y, bx + 6, rain_text(day.rain).rjust(6), pal.rain if (day.rain or 0) >= 0.1 else pal.dim, bg)
+            wet = day is not None and (day.rain or 0) >= 0.1
+            if day and (wet or not c.compact):  # compact: dry days leave the rain column empty
+                c.put(y, bx + (5 if c.compact else 6), rain_text(day.rain).rjust(6), pal.rain if wet else pal.dim, bg)
         else:
             self._rain_bar(c, y, rx, width, rain_top, day.rain if day else None, normal, bg)
-            bx = rx + width + 2
+            bx = rx + width + (1 if c.compact else 2)
             if normal:
                 c.put(y, bx, "avg", pal.dim, bg)
                 c.put(y, bx + 4, rain_text(normal.rain).rjust(6), pal.dim, bg)
@@ -597,21 +740,32 @@ class WeatherUI(Views):
             ("Open-Meteo", "weather data by Open-Meteo.com (CC BY 4.0)"),
             ("Copernicus", "contains modified Copernicus Climate Change Service information"),
         ]
-        w = min(c.w - 4, 78)
-        h = min(c.h - 2, len(lines) + 4)
+        w = c.w - 2 if c.compact else min(c.w - 4, 78)  # compact: full width, nothing peeks out beside it
+        kx, dx = (4, 21) if c.compact else (4, 22)
+        rows: list[tuple[str, str]] = []  # descriptions wrapped to the panel
+        for key, desc in lines:
+            if key and not desc:
+                rows.append((key, ""))
+                continue
+            wrapped = textwrap.wrap(desc, w - dx - 2) or [""]
+            rows += [(key, wrapped[0])] + [("", more) for more in wrapped[1:]]
+        h = min(c.h - 2, len(rows) + 4)
         x0, y0 = (c.w - w) // 2, max(1, (c.h - h) // 2)
+        visible = h - 3
+        self.help_scroll = max(0, min(self.help_scroll, len(rows) - visible))
         for r in range(h):
             c.fill(y0 + r, x0, w, pal.panel)
         c.put(y0 + 1, x0 + 2, "pdwx keys", pal.title, pal.panel, bold=True)
+        if len(rows) > visible:
+            more = f"{self.help_scroll + visible}/{len(rows)} ↑↓"
+            c.put(y0 + 1, x0 + w - 2 - len(more), more, pal.dim, pal.panel)
         y = y0 + 2
-        for key, desc in lines:
-            if y >= y0 + h - 1:
-                break
+        for key, desc in rows[self.help_scroll : self.help_scroll + visible]:
             if key and not desc:
                 c.put(y, x0 + 2, key, pal.accent, pal.panel, bold=True)
             else:
-                c.put(y, x0 + 4, key, pal.text, pal.panel, bold=True)
-                c.put(y, x0 + 22, desc, pal.muted, pal.panel, width=w - 24)
+                c.put(y, x0 + kx, key, pal.text, pal.panel, bold=True, width=dx - kx - 1)
+                c.put(y, x0 + dx, desc, pal.muted, pal.panel, width=w - dx - 2)
             y += 1
 
     # ── keys ───────────────────────────────────────────────────────────
@@ -641,11 +795,14 @@ class WeatherUI(Views):
                 self.status, self.status_colour = "Settings saved", self.pal.dim
             return None
         if key in ("?", "f1"):
-            self.help = not self.help
+            self.help, self.help_scroll = not self.help, 0
             return None
         if self.help:
             if key == "esc":
                 self.help = False
+            elif key in ("up", "k", "down", "j", "pgup", "pgdn"):
+                step = {"up": -1, "k": -1, "down": 1, "j": 1, "pgup": -10, "pgdn": 10}[key]
+                self.help_scroll = max(0, self.help_scroll + step)
             return None
         if key == "esc":
             if self.drill == "detail":

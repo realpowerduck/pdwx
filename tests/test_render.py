@@ -16,7 +16,7 @@ from pdwx.ui import VIEWS, WeatherUI
 from pdwx.weather_data import Place
 
 TODAY = date(2026, 9, 26)
-SIZES = [(20, 60), (24, 80), (40, 120), (50, 200)]
+SIZES = [(20, 60), (30, 60), (24, 80), (40, 120), (50, 200)]
 
 
 def block(start: date, days: int, offset: float = 0.0, forecast: bool = False) -> dict:
@@ -116,6 +116,32 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Today 26 Sep", screen)
         self.assertIn("Normal", screen)
         self.assertIn("years", screen)
+
+    def test_compact_layout_at_60_columns(self):
+        ui, term = make_ui(20, 60)
+        lines = self.draw(ui, term).splitlines()
+        self.assertIn("Testville", lines[0])
+        self.assertIn("Week  ● ○ ○ ○ ○", lines[0])  # view name and one dot per view
+        self.assertNotIn("Somewhere", lines[0])  # region dropped to make room
+        self.assertIn("Today 26 Sep", lines[2])
+        self.assertIn("above normal", lines[3])  # stacked headline: how unusual on its own line
+        self.assertIn("Normal", lines[4])
+        self.assertIn("? help", lines[-1])
+        ui.view = "month"
+        self.assertIn("Month  ○ ● ○ ○ ○", self.draw(ui, term).splitlines()[0])
+
+    def test_help_scrolls_when_short(self):
+        ui, term = make_ui(20, 60)
+        ui.handle("?")
+        first = self.draw(ui, term)
+        for _ in range(5):
+            ui.handle("down")
+        self.assertNotEqual(first, self.draw(ui, term))
+        for _ in range(99):
+            ui.handle("down")
+        self.assertIn("Copernicus", self.draw(ui, term))  # the last line is reachable
+        ui.handle("?")
+        self.assertFalse(ui.help)
 
     def test_keys_do_not_crash(self):
         keys = [
