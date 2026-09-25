@@ -1,0 +1,29 @@
+# Maintainer: Powerduck <realpowerduck at gmail dot com>
+# Draft: fill in the checksum after the first PyPI release (`updpkgsums`), then `makepkg --printsrcinfo > .SRCINFO`.
+pkgname=pdwx
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="How unusual is today's weather? Terminal app comparing the forecast with every day since 1940"
+arch=('any')
+url="https://github.com/realpowerduck/pdwx"
+license=('MIT')
+depends=('python>=3.11')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+source=("https://files.pythonhosted.org/packages/source/p/pdwx/pdwx-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "pdwx-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "pdwx-$pkgver"
+  PYTHONPATH=src python -m unittest discover -s tests
+}
+
+package() {
+  cd "pdwx-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdwx"
+version = "0.2.0"
+description = "How unusual is today's weather? A terminal app comparing the forecast with every day since 1940."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Powerduck", email = "realpowerduck@gmail.com" }]
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["weather", "climate", "terminal", "tui", "era5", "open-meteo"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+
+[project.urls]
+Homepage = "https://github.com/realpowerduck/pdwx"
+Issues = "https://github.com/realpowerduck/pdwx/issues"
+
+[project.scripts]
+pdwx = "pdwx.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM"]
+ignore = ["SIM108"]  # ternaries are not always clearer
