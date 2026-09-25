@@ -10,7 +10,7 @@
 - **Climate view.** Warming stripes for the year and the month, decade averages, hot days per decade, when the first hot day of the season arrives, rainfall stripes and dry spells.
 - **Heatmap** of every day since 1940.
 - **Any date across 87 years.** Press Enter on a date to see it in every year, then open a single day.
-- **Compare two places**, save birthdays and anniversaries, and jump to any date.
+- **Compare two places** and jump to any date.
 - `pdwx --line` / `--json` print a one-line summary for status bars such as Waybar.
 
 | Month | Climate | Heatmap |
@@ -38,14 +38,13 @@ The first run opens settings: temperature (°C/°F), rain (mm/in), wind (km/h, m
 
 | Key | |
 |---|---|
-| `Tab` / `Shift+Tab`, `1`–`6` | Week, Month, Chart, Climate, Heatmap, Dates |
+| `Tab` / `Shift+Tab`, `1`–`5` | Week, Month, Chart, Climate, Heatmap |
 | `↑↓←→`, `PgUp`/`PgDn` | move the day / month (the footer shows each view's keys) |
 | `Enter` | this date across every year, then that single day |
 | `Esc` | back; from a view, choose another place |
 | `:` | go to a date (`14 Mar 1961`, `1990-07-02`, `march 14`) |
 | `r` | temperature ↔ rain |
 | `c` / `x` | compare with another place / stop |
-| `b` | save the selected date to Dates |
 | `,` | settings |
 | `F5` | refresh the forecast |
 | `?` | help · `q` quit · `Ctrl+Z` suspend |
@@ -58,7 +57,7 @@ Other options: `pdwx --location "Portland, OR"` or coordinates (`--location=45.5
 - **Forecast** is Open-Meteo's 16-day forecast. `H`, `R` and `F` mark archive, recent model analysis (ERA5 lags about five days) and forecast.
 - **Normal** is the 1991–2020 average for the date, smoothed over ±7 days. A *hot day* is hotter than 95% of 1991–2020 days. *Dry* means under 1 mm.
 - The first visit to a place downloads 1940 to last year (about 1 MB); after that only new years download. Sun, wind, humidity and feels-like history (about 1.2 MB) download only when you open a past day's details. Open-Meteo's free tier is shared by everything on your connection and weights long date ranges heavily, so allow a handful of new places a day. pdwx waits out the per-minute limit with a countdown and keeps working from its cache if the hourly or daily limit is reached.
-- Cache: `~/.cache/pdwx`. Saved places and dates: `~/.local/state/pdwx` (both follow the XDG variables).
+- Cache: `~/.cache/pdwx`. Saved places: `~/.local/state/pdwx` (both follow the XDG variables).
 
 ### Can 86 years of history forecast further than 16 days?
 
@@ -66,7 +65,7 @@ We tested it. `pdwx --backtest` fits long-range methods on 1961–1990 and score
 
 ## Privacy
 
-pdwx has no accounts, analytics or telemetry. It talks only to Open-Meteo, sending the text you search for and the coordinates of places you open, and, for `--backtest` only, downloads NOAA's El Niño index. Your settings, home place, saved places and dates stay on your machine in files only you can read. Text from outside (place names, error messages) is stripped of terminal control codes before it is drawn.
+pdwx has no accounts, analytics or telemetry. It talks only to Open-Meteo, sending the text you search for and the coordinates of places you open, and, for `--backtest` only, downloads NOAA's El Niño index. Your settings, home place and saved places stay on your machine in files only you can read. Text from outside (place names, error messages) is stripped of terminal control codes before it is drawn.
 
 ## Credits
 

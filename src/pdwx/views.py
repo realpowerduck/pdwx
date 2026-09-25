@@ -8,8 +8,7 @@ from statistics import mean
 from datetime import date, timedelta
 
 from .climate import BASE_YEARS, Climate, Day
-from .location_history import saved_dates
-from .style import day_month, deg, deg1, delta, delta1, full_date, icon, icon_colour, ordinal
+from .style import day_month, deg, deg1, delta, delta1, full_date, icon_colour, ordinal
 from .style import rain as rain_text
 from .style import snow as snow_text
 from .style import wind as wind_text
@@ -756,86 +755,3 @@ class Views:
                     ("   ▸ upper half of a row  ▹ lower half", pal.dim, False),
                 ],
             )
-
-    # ── saved dates ───────────────────────────────────────────────────
-    def _draw_dates(self, c: Canvas, top: int, bottom: int) -> None:
-        pal, clim = self.pal, self.clim
-        rows = saved_dates()
-        c.put(top, 2, "Your dates", pal.title, bold=True)
-        c.put(top, 14, "birthdays, anniversaries: the weather on the day, and what it's usually like", pal.dim)
-        if not rows:
-            y = top + 2
-            for line in (
-                "Nothing saved yet.",
-                "Press a to add one (for example: Mum's birthday, 14 Mar 1961),",
-                "or press b in any other view to save the selected date.",
-            ):
-                c.put(y, 4, line, pal.muted)
-                y += 1
-            return
-        self.dates_index = max(0, min(self.dates_index, len(rows) - 1))
-        y = top + 2
-        for i, row in enumerate(rows):
-            if y + 1 >= bottom:
-                break
-            chosen = i == self.dates_index
-            bg = pal.select if chosen else None
-            if chosen:
-                c.fill(y, 0, c.w, pal.select)
-                c.fill(y + 1, 0, c.w, pal.select)
-                c.put(y, 0, "▌", pal.accent, bg)
-                c.put(y + 1, 0, "▌", pal.accent, bg)
-            month, dn, year = row["month"], row["day"], row["year"]
-            try:
-                probe = date(year or 2000, month, dn)
-            except ValueError:
-                continue
-            c.put(y, 2, row["label"], pal.text, bg, bold=True, width=30)
-            when = f"{dn} {calendar.month_abbr[month]}" + (f" {year}" if year else " · every year")
-            c.put(y, 34, when, pal.muted, bg)
-            nxt = self._next_occurrence(month, dn)
-            away = (nxt - self.today).days
-            c.put(y, c.w - 16, "today!" if away == 0 else f"in {away} days", pal.accent if away <= 16 else pal.dim, bg)
-            parts: list[tuple[str, RGB | None, bool]] = []
-            if year:
-                day, normal = clim.day(probe), clim.normal(probe)
-                if day:
-                    parts += [
-                        (f"That day in {year}  ", pal.dim, False),
-                        (icon(day.code) + " ", icon_colour(pal, day.code), False),
-                        (deg(day.hi), pal.temp(day.hi), True),
-                        ("/", pal.dim, False),  # type: ignore[arg-type]
-                        (deg(day.lo), pal.temp(day.lo), False),
-                        (f" {rain_text(day.rain)}  ", pal.rain, False),
-                    ]  # type: ignore[arg-type]
-                    if normal:
-                        dv = day.hi - normal.hi  # type: ignore[operator]
-                        parts += [(delta(dv) + " vs normal", pal.anomaly(dv), False)]
-                        warm, cool, total = clim.rank(probe, day.hi)  # type: ignore[arg-type]
-                        parts += [(f" · {ordinal(warm)} warmest of {total}", pal.dim, False)]
-                    parts += [("     ", None, False)]
-                elif year < clim.first_year:
-                    parts += [(f"Before {clim.first_year}: no record  ", pal.dim, False)]
-            normal = clim.normal(nxt)
-            if normal:
-                parts += [("Usually ", pal.dim, False), (f"{deg(normal.hi)}/{deg(normal.lo)}", pal.muted, False)]
-            fc = clim.day(nxt)
-            if fc and fc.src == "F":
-                parts += [
-                    ("   Forecast ", pal.green, False),
-                    (deg(fc.hi), pal.temp(fc.hi), True),  # type: ignore[arg-type]
-                    ("/", pal.dim, False),
-                    (deg(fc.lo), pal.temp(fc.lo), False),
-                ]  # type: ignore[arg-type]
-            self._parts(c, y + 1, 4, parts)
-            y += 3
-
-    def _next_occurrence(self, month: int, dn: int) -> date:
-        for year in (self.today.year, self.today.year + 1, self.today.year + 2):
-            try:
-                d = date(year, month, dn)
-            except ValueError:
-                continue
-            if d >= self.today:
-                return d
-        return self.today

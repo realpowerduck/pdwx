@@ -1,4 +1,4 @@
-"""The weather views: week, month, chart, climate, heatmap, dates and their drill-downs."""
+"""The weather views: week, month, chart, climate, heatmap and their drill-downs."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .climate import BASE_YEARS, Climate, Day, Normal
-from .location_history import save_dates, saved_dates
 from .style import UNITS, Palette, day_month, deg, deg1, delta, full_date, icon, icon_colour, ordinal, rain_value, temp
 from .style import rain as rain_text
 from .views import Views
@@ -24,14 +23,13 @@ if TYPE_CHECKING:
     from .app import App, Loaded
 
 STATUS_SECONDS = 10
-VIEWS = ("week", "month", "chart", "climate", "heatmap", "dates")
+VIEWS = ("week", "month", "chart", "climate", "heatmap")
 LABELS = {
     "week": "Week",
     "month": "Month",
     "chart": "Chart",
     "climate": "Climate",
     "heatmap": "Heatmap",
-    "dates": "Dates",
 }
 SOURCE = {"H": "archive", "R": "recent model", "F": "forecast"}
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
@@ -115,7 +113,6 @@ class WeatherUI(Views):
         self.years_sort = False
         self.chart_scroll = 0
         self.heat_year = self.today.year
-        self.dates_index = 0
         self.compare: tuple[Any, Climate] | None = None
         self.help = False
         self.jobs: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -371,7 +368,6 @@ class WeatherUI(Views):
             "chart": [("↑↓", "day"), ("PgUp/Dn", "month"), ("Enter", "history"), ("r", "rain/temp")],
             "climate": [("←→", "month")],
             "heatmap": [("↑↓", "year"), ("←→", "month"), ("Enter", "open month")],
-            "dates": [("↑↓", "choose"), ("Enter", "history"), ("a", "add"), ("Del", "remove")],
         }
         return per[self.view] + common
 
@@ -546,7 +542,7 @@ class WeatherUI(Views):
         pal = self.pal
         lines = [
             ("Views", ""),
-            ("Tab / Shift+Tab", "next / previous view (or 1–6)"),
+            ("Tab / Shift+Tab", "next / previous view (or 1–5)"),
             ("Enter", "this date across every year · again for that day"),
             ("Esc", "back · from a view, choose another place"),
             ("", ""),
@@ -559,7 +555,6 @@ class WeatherUI(Views):
             ("Options", ""),
             ("r", "switch temperature / rain"),
             ("c  ·  x", "compare with another place  ·  stop comparing"),
-            ("b", "save the selected date to Dates"),
             ("F5", "refresh the forecast"),
             (",", "settings: units, icons, week start, home place"),
             ("q", "quit"),
@@ -655,9 +650,6 @@ class WeatherUI(Views):
                 else:
                     self.status, self.status_colour = f"Couldn't read {answer!r} as a date", self.pal.yellow
             return None
-        if key == "b":
-            self._save_date(self.detail if self.drill == "detail" and self.detail else self.sel)
-            return None
         if key == "c":
             self._pick_compare()
             return None
@@ -672,7 +664,7 @@ class WeatherUI(Views):
             i = VIEWS.index(self.view)
             self.view = VIEWS[(i + (1 if key == "tab" else -1)) % len(VIEWS)]
             return None
-        if key in "123456" and len(key) == 1:
+        if key in "12345" and len(key) == 1:
             self.view = VIEWS[int(key) - 1]
             return None
         return getattr(self, f"_keys_{self.view}")(key)
@@ -737,38 +729,6 @@ class WeatherUI(Views):
             self.sel = date(year, self.sel.month, min(self.sel.day, calendar.monthrange(year, self.sel.month)[1]))
             self.view = "chart"
 
-    def _keys_dates(self, key: str) -> None:
-        rows = saved_dates()
-        if key in ("up", "k"):
-            self.dates_index = max(0, self.dates_index - 1)
-        elif key in ("down", "j"):
-            self.dates_index = min(max(0, len(rows) - 1), self.dates_index + 1)
-        elif key == "a":
-            label = self.app.prompt("Name:", self._backdrop)
-            if not label:
-                return
-            when = self.app.prompt(f"Date for {label} (e.g. 14 Mar 1961, or 14 Mar for yearly):", self._backdrop)
-            parsed = parse_date(when or "", self.today) if when else None
-            if not parsed:
-                self.status, self.status_colour = "That date didn't make sense; nothing saved", self.pal.yellow
-                return
-            d, given = parsed
-            rows.append({"label": label, "month": d.month, "day": d.day, "year": d.year if given else None})
-            self._write_dates(rows)
-            self.dates_index = len(rows) - 1
-        elif key in ("delete", "x", "backspace") and rows:
-            removed = rows.pop(self.dates_index)
-            self._write_dates(rows)
-            self.status, self.status_colour = f"Removed {removed['label']}", self.pal.dim
-        elif key == "enter" and rows:
-            row = rows[self.dates_index]
-            year = row["year"] or self.today.year
-            try:
-                self.sel = date(year, row["month"], row["day"])
-            except ValueError:
-                return
-            self._enter_years()
-
     def _keys_years(self, key: str) -> None:
         rows = self._years_rows()
         if key in ("up", "k"):
@@ -811,21 +771,6 @@ class WeatherUI(Views):
         self.years_index = next((i for i, r in enumerate(rows) if r.date == self.detail), self.years_index)
 
     # ── actions ────────────────────────────────────────────────────────
-    def _write_dates(self, rows: list[dict]) -> None:
-        try:
-            save_dates(rows)
-        except OSError as exc:
-            self.status, self.status_colour = f"Could not save dates: {exc}", self.pal.yellow
-
-    def _save_date(self, d: date) -> None:
-        label = self.app.prompt(f"Save {full_date(d)} as:", self._backdrop)
-        if not label:
-            return
-        rows = saved_dates()
-        rows.append({"label": label, "month": d.month, "day": d.day, "year": d.year if d < self.today else None})
-        self._write_dates(rows)
-        self.status, self.status_colour = f"Saved {label} to Dates", self.pal.dim
-
     def _pick_compare(self) -> None:
         other = self.app.pick("Compare with…", exclude=self.place)
         if not other:
