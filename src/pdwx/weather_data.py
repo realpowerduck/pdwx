@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -130,6 +131,20 @@ def _reason(err: urllib.error.HTTPError) -> str:
         return str(err.reason)
 
 
+_TLS: ssl.SSLContext | None = None
+
+
+def _tls() -> ssl.SSLContext:
+    """Default TLS context; python.org's macOS build ships without CA certificates, so borrow the system's."""
+    global _TLS
+    if _TLS is None:
+        _TLS = ssl.create_default_context()
+        paths = ssl.get_default_verify_paths()
+        if paths.cafile is None and paths.capath is None and os.path.exists("/etc/ssl/cert.pem"):
+            _TLS.load_verify_locations("/etc/ssl/cert.pem")
+    return _TLS
+
+
 def _get_json(
     url: str,
     timeout: int = 25,
@@ -143,7 +158,7 @@ def _get_json(
     while True:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as response:
+            with urllib.request.urlopen(req, timeout=timeout, context=_tls()) as response:
                 data = json.load(response)
             break
         except urllib.error.HTTPError as err:
@@ -159,6 +174,10 @@ def _get_json(
                     progress(f"{label} · Open-Meteo asks us to wait a minute", left)
                 sleep(min(1.0, left))
         except (urllib.error.URLError, TimeoutError, ConnectionError) as err:
+            reason = getattr(err, "reason", None)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                detail = getattr(reason, "verify_message", None) or reason
+                raise RuntimeError(f"certificate check failed ({detail})") from None
             network_failures += 1
             if network_failures > 2:
                 raise RuntimeError(f"Network error: {getattr(err, 'reason', err)}") from None
@@ -473,7 +492,7 @@ def load_oni(refresh: bool = False) -> str | None:
         pass
     try:
         req = urllib.request.Request(ONI_URL, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=20) as response:
+        with urllib.request.urlopen(req, timeout=20, context=_tls()) as response:
             text = response.read().decode("utf-8", "replace")
         if "SEAS" not in text:
             raise RuntimeError("unexpected ONI file")

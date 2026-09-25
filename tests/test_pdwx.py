@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import ssl
 import tempfile
 import unittest
 import urllib.error
@@ -210,6 +211,31 @@ class NetworkTests(unittest.TestCase):
         hourly = [self.error("Hourly API request limit exceeded.")]
         with mock.patch("urllib.request.urlopen", side_effect=hourly), self.assertRaises(weather_data.RateLimited):
             weather_data._get_json("https://example.invalid/x", sleep=lambda s: None)
+
+    def test_borrows_system_certificates_when_python_has_none(self):
+        none = ssl.DefaultVerifyPaths(None, None, "SSL_CERT_FILE", "", "SSL_CERT_DIR", "")
+        for paths, exists, loads in (
+            (none, True, True),
+            (none, False, False),
+            (ssl.get_default_verify_paths(), True, None),
+        ):
+            with (
+                mock.patch.object(weather_data, "_TLS", None),
+                mock.patch("ssl.get_default_verify_paths", return_value=paths),
+                mock.patch("os.path.exists", return_value=exists),
+                mock.patch("ssl.SSLContext.load_verify_locations") as load,
+            ):
+                weather_data._tls()
+            if loads is None:
+                loads = paths.cafile is None and paths.capath is None
+            self.assertEqual(load.called, loads)
+
+    def test_certificate_failure_is_not_retried(self):
+        bad = urllib.error.URLError(ssl.SSLCertVerificationError("unable to get local issuer certificate"))
+        with mock.patch("urllib.request.urlopen", side_effect=[bad]) as urlopen, self.assertRaises(RuntimeError) as ctx:
+            weather_data._get_json("https://example.invalid/x", sleep=lambda s: None)
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertIn("local issuer", str(ctx.exception))
 
     def test_merge_daily_prefers_later_values(self):
         a = {"daily": {"time": ["2026-01-01", "2026-01-02"], "x": [1, 2]}}

@@ -149,7 +149,7 @@ class App:
         results: list[Place] | None = None
         searching = False
         pending_at: float | None = None
-        found_q: queue.Queue[tuple[str, list[Place] | None]] = queue.Queue()
+        found_q: queue.Queue[tuple[str, list[Place] | str]] = queue.Queue()
         message = ""
         frame = 0
 
@@ -157,8 +157,8 @@ class App:
             def work() -> None:
                 try:
                     found_q.put((value, search_places(value)))
-                except Exception:
-                    found_q.put((value, None))
+                except Exception as exc:
+                    found_q.put((value, str(exc) or type(exc).__name__))
 
             threading.Thread(target=work, daemon=True).start()
 
@@ -172,8 +172,8 @@ class App:
                 if value != query:
                     continue
                 searching = False
-                if found is None:
-                    message = "Search unavailable right now · saved places still work"
+                if isinstance(found, str):
+                    message = f"Search failed: {found} · saved places still work"
                     results = []
                 else:
                     results = [p for p in found if not exclude or p.key != exclude.key]
@@ -242,7 +242,7 @@ class App:
                     c.put(row, c.w - 3 - len(coords), coords, pal.dim, bg)
                     row += 1
                 if message and len(key_q) >= 2:
-                    c.put(c.h - 2, 3, message, pal.dim)
+                    c.put(c.h - 2, 3, message, pal.dim, width=c.w - 6)
                 hints = [
                     ("↑↓", "choose"),
                     ("Enter", "open"),
