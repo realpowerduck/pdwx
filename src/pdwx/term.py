@@ -6,10 +6,12 @@ terminal directly.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import select
 import signal
+import struct
 import sys
 import termios
 import time
@@ -243,6 +245,16 @@ class Terminal:
         except OSError:
             cols, rows = 80, 24
         return rows, cols
+
+    def pixel_aspect(self) -> float:
+        """Height over width of a half-cell, from the window's size in pixels; 1.0 if the terminal won't say."""
+        try:
+            rows, cols, xpix, ypix = struct.unpack("HHHH", fcntl.ioctl(self.out.fileno(), termios.TIOCGWINSZ, bytes(8)))
+        except OSError:
+            return 1.0
+        if not (rows and cols and xpix and ypix):
+            return 1.0
+        return max(0.7, min(1.5, (ypix / rows / 2) / (xpix / cols)))
 
     def _read(self, timeout: float) -> bytes:
         try:

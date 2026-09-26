@@ -9,6 +9,7 @@
 - **Month calendar** where past days show what actually happened, shaded by how far they were from normal.
 - **Climate view.** Warming stripes for the year and the month, decade averages, hot days per decade, when the first hot day of the season arrives, rainfall stripes and dry spells.
 - **Heatmap** of every day since 1940.
+- **The Moon** over the place you're viewing, for any date and hour: lit from the real direction of the Sun, turned the way you'd see it from that latitude (upside down from the south), with moonrise, moonset and the next full and new moons. `↑↓` walks through the night.
 - **Any date across 87 years.** Press Enter on a date to see it in every year, then open a single day.
 - **Compare two places** and jump to any date.
 - `pdwx --line` / `--json` print a one-line summary for status bars such as Waybar.
@@ -38,7 +39,7 @@ The first run opens settings: temperature (°C/°F), rain (mm/in), wind (km/h, m
 
 | Key | |
 |---|---|
-| `Tab` / `Shift+Tab`, `1`–`5` | Week, Month, Chart, Climate, Heatmap |
+| `Tab` / `Shift+Tab`, `1`–`6` | Week, Month, Chart, Climate, Heatmap, Moon |
 | `↑↓←→`, `PgUp`/`PgDn` | move the day / month (the footer shows each view's keys) |
 | `Enter` | this date across every year, then that single day |
 | `Esc` | back; from a view, choose another place |
@@ -57,6 +58,7 @@ Other options: `pdwx --location "Portland, OR"` or coordinates (`--location=45.5
 - **Forecast** is Open-Meteo's 16-day forecast. `H`, `R` and `F` mark archive, recent model analysis (ERA5 lags about five days) and forecast.
 - **Normal** is the 1991–2020 average for the date, smoothed over ±7 days. A *hot day* is hotter than 95% of 1991–2020 days. *Dry* means under 1 mm.
 - The first visit to a place downloads 1940 to last year (about 1 MB); after that only new years download. Sun, wind, humidity and feels-like history (about 1.2 MB) download only when you open a past day's details. Open-Meteo's free tier is shared by everything on your connection and weights long date ranges heavily, so allow a handful of new places a day. pdwx waits out the per-minute limit with a countdown and keeps working from its cache if the hourly or daily limit is reached.
+- **The Moon** is computed on your machine, after Jean Meeus's *Astronomical Algorithms*: rise and set times and phases land within a minute or two of the US Naval Observatory's. Its face is the Clementine 750 nm albedo mosaic from USGS Astrogeology (public domain), cut down by `scripts/build_moon_map.py` and lit by pdwx itself.
 - Cache: `~/.cache/pdwx`. Saved places: `~/.local/state/pdwx` (both follow the XDG variables).
 
 ### Can 86 years of history forecast further than 16 days?
@@ -69,14 +71,14 @@ pdwx has no accounts, analytics or telemetry. It talks only to Open-Meteo, sendi
 
 ## Credits
 
-Weather data by [Open-Meteo.com](https://open-meteo.com/) under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Contains modified Copernicus Climate Change Service information (ERA5). The El Niño index used by `--backtest` is from NOAA's Climate Prediction Center. Open-Meteo's free API is for non-commercial use.
+Weather data by [Open-Meteo.com](https://open-meteo.com/) under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Contains modified Copernicus Climate Change Service information (ERA5). The Moon's surface is from the [Clementine UVVIS 750 nm global mosaic](https://astrogeology.usgs.gov/search/map/Moon/Clementine/UVVIS/Lunar_Clementine_UVVIS_750nm_Global_Mosaic_118m_v2) (NASA/USGS, public domain); positions follow Jean Meeus, *Astronomical Algorithms*. The El Niño index used by `--backtest` is from NOAA's Climate Prediction Center. Open-Meteo's free API is for non-commercial use.
 
 ## Development
 
 ```sh
 uv tool install --editable .
-python -m unittest discover -s tests     # 26 tests, including every screen drawn at five terminal sizes
+python -m unittest discover -s tests     # 37 tests, including every screen drawn at five terminal sizes
 uvx ruff check src tests && uvx ruff format --check src tests
 ```
 
-The code has no dependencies outside the standard library. `term.py` is the raw terminal and canvas, `climate.py` the statistics, `ui.py` and `views.py` the screens, and `outlook.py` the backtest. MIT licensed.
+The code has no dependencies outside the standard library. `term.py` is the raw terminal and canvas, `climate.py` the statistics, `ui.py` and `views.py` the screens, `outlook.py` the backtest and `moon.py` the Moon. MIT licensed.

@@ -34,6 +34,9 @@ pdwx = "pdwx.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+pdwx = ["moon_map.bin"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"

@@ -5,14 +5,15 @@ from __future__ import annotations
 import calendar
 import math
 from statistics import mean
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from .climate import BASE_YEARS, Climate, Day
 from .style import day_month, deg, deg1, delta, delta1, full_date, icon_colour, ordinal
 from .style import rain as rain_text
 from .style import snow as snow_text
 from .style import wind as wind_text
-from .term import RGB, Canvas, clip, ink_for, mix, text_width
+from .moon import MoonSky, face, moon_sky, next_phase, phase_name, rise_set
+from .term import RGB, Canvas, clip, ink_for, luminance, mix, text_width
 from .weather_data import condition
 
 
@@ -798,3 +799,234 @@ class Views:
                     [(key, pal.dim, False)],
                 ],
             )
+
+    # ── moon ──────────────────────────────────────────────────────────
+    def _moon_facts(self, moment: datetime) -> dict:
+        """Everything the Moon view says about one moment, cached by the minute."""
+        key = ("facts", moment.replace(second=0, microsecond=0))
+        if len(self._moon_cache) > 120:  # live mode adds a moment a minute
+            self._moon_cache.clear()
+        if key not in self._moon_cache:
+            lat, lon = self.place.latitude, self.place.longitude
+            day = moment.date()
+            rise, sett = rise_set(day, self.zone, lat, lon)
+            self._moon_cache[key] = {
+                "sky": moon_sky(moment, lat, lon),
+                "name": phase_name(day, self.zone),
+                "rise": rise,
+                "set": sett,
+                "full": next_phase(moment, 180).astimezone(self.zone),
+                "new": next_phase(moment, 0).astimezone(self.zone),
+                "age": (moment - next_phase(moment, 0, backwards=True)).total_seconds() / 86400,
+            }
+        return self._moon_cache[key]
+
+    def _moon_inks(self) -> tuple[RGB, RGB, RGB, RGB, RGB]:
+        """(sky, text, dim, lit surface, dark surface): the night stays dark even in a light theme."""
+        pal = self.pal
+        if luminance(pal.bg) > 0.35:
+            sky = mix(pal.blue, (0, 0, 0), 0.78)
+            text = (236, 237, 242)
+            lit = (250, 250, 246)
+        else:
+            sky, text = pal.bg, pal.text
+            lit = mix(pal.text, (255, 255, 255), 0.6)  # near white, with a hint of the theme
+        return sky, text, mix(sky, text, 0.55), lit, mix(sky, lit, 0.03)
+
+    def _draw_moon(self, c: Canvas, top: int, bottom: int) -> None:
+        pal = self.pal
+        moment = self._moon_moment()
+        facts = self._moon_facts(moment)
+        sky_state: MoonSky = facts["sky"]
+        sky, text, dim, lit, dark = self._moon_inks()
+        aspect = getattr(self.app.term, "pixel_aspect", lambda: 1.0)()
+        live = self.moon_hour is None and self.sel == self.today
+        amber = pal.yellow
+        rows = bottom - top
+        if sky != pal.bg:
+            for y in range(top, bottom):
+                c.fill(y, 0, c.w, sky)
+
+        def clock(t: datetime) -> str:
+            return f"{t.hour % 12 or 12}:{t.minute:02d} {'am' if t.hour < 12 else 'pm'}"
+
+        def until(t: datetime) -> str:
+            days = (t - moment).total_seconds() / 86400
+            if days < 1:
+                return f"in {max(1, round(days * 24))} h"
+            return f"in {days:.1f} days" if days < 10 else f"in {round(days)} days"
+
+        def on(t: datetime) -> str:
+            return f"{t:%a} {day_month(t.date())}" + (f" {t.year}" if t.year != self.today.year else "")
+
+        lit_pct = f"{round(sky_state.lit * 100)}% lit"
+        compass = _compass(sky_state.azimuth)
+        when = [(f"{on(moment)} · {clock(moment)}", amber, False)]
+        if sky_state.altitude > 0:
+            where = [
+                ("Up now" if live else "Up", amber if live else text, False),
+                (f" · {sky_state.altitude:.0f}° high · {compass}", text, False),
+            ]
+        else:
+            where = [("Below the horizon", dim, False)]
+        rise = (
+            [("↑ ", amber, False), ("Moonrise ", dim, False), (clock(facts["rise"]), text, False)]
+            if facts["rise"]
+            else [("↑ ", amber, False), ("No moonrise this day", dim, False)]
+        )
+        sett = (
+            [("↓ ", pal.magenta, False), ("Moonset ", dim, False), (clock(facts["set"]), text, False)]
+            if facts["set"]
+            else [("↓ ", pal.magenta, False), ("No moonset this day", dim, False)]
+        )
+        full, new = facts["full"], facts["new"]
+        distance = [(f"{sky_state.distance:,.0f} km away", dim, False)]
+        if sky_state.distance < 362000:
+            distance.append((" · near perigee", amber, False))
+        elif sky_state.distance > 404000:
+            distance.append((" · near apogee", dim, False))
+        # the column beside the disc, each line's variants widest first
+        panel: list[list[list[tuple[str, RGB | None, bool]]]] = [
+            [[(facts["name"], text, True)]],
+            [[(f"{lit_pct} · {facts['age']:.1f} days old", dim, False)], [(lit_pct, dim, False)]],
+            [],
+            *([] if live else [[when, [(clock(moment), amber, False)]]]),
+            [
+                where,
+                *([where[:1] + [(f" · {sky_state.altitude:.0f}° {compass}", text, False)]] if len(where) > 1 else []),
+                where[:1],
+            ],
+            [rise, rise[:1] + rise[2:]],
+            [sett, sett[:1] + sett[2:]],
+            [],
+            [
+                [("Full moon ", dim, False), (on(full), text, False), (f" · {until(full)}", dim, False)],
+                [("Full ", dim, False), (on(full), text, False)],
+            ],
+            [
+                [("New moon ", dim, False), (on(new), text, False), (f" · {until(new)}", dim, False)],
+                [("New ", dim, False), (on(new), text, False)],
+            ],
+            [],
+            [distance, distance[:1]],
+        ]
+
+        def pick(variants: list, width: int) -> list:
+            for v in variants:
+                if sum(text_width(t) for t, _, _ in v) <= width:
+                    return v
+            return []
+
+        # the column beside the disc: try narrower wordings and keep whichever leaves the biggest disc
+        r_side, chosen, panel_w, region_w = -1.0, [], 0, 0
+        for cap in (40, 32, 26, 20):
+            lines = [pick(v, cap) if v else [] for v in panel]
+            if any(v and not line for v, line in zip(panel, lines, strict=True)):
+                continue
+            width = max(sum(text_width(t) for t, _, _ in line) for line in lines)
+            region = c.w - width - 6
+            r = min(0.86 * rows * aspect, (region - 4) / 2)
+            if r > r_side + 0.5:
+                r_side, chosen, panel_w, region_w = r, lines, width, region
+        # stacked: the disc above a few centred lines
+        stacked = [
+            [[(facts["name"], text, True), (f"  {lit_pct}", dim, False)], [(facts["name"], text, True)]],
+            [when + [(" · ", dim, False), *where], where] if not live else [where, where[:1]],
+            [
+                rise + [("   ", None, False), *sett],
+                [
+                    ("↑ ", amber, False),
+                    (clock(facts["rise"]) if facts["rise"] else "—", text, False),
+                    ("  ↓ ", pal.magenta, False),
+                    (clock(facts["set"]) if facts["set"] else "—", text, False),
+                ],
+            ],
+            [
+                [("Full ", dim, False), (on(full), text, False), ("   New ", dim, False), (on(new), text, False)],
+                [("Full ", dim, False), (on(full), text, False)],
+            ],
+        ]
+        r_stack = min(0.86 * (rows - len(stacked) - 1) * aspect, (c.w - 6) / 2)
+        side = r_side >= r_stack and len(panel) <= rows
+        if side:
+            radius = max(3.0, r_side)
+            cx, cy = 2 + region_w / 2, rows
+            text_box = (c.w - panel_w - 3, top + (rows - len(panel)) // 2, panel_w + 2, len(panel))
+            room = min(cx, text_box[0] - cx, cy * aspect)  # the glow stops short of the edge and the text
+        else:
+            radius = max(3.0, r_stack)
+            disc_rows = rows - len(stacked) - 1
+            cx, cy = c.w / 2, disc_rows
+            text_box = (0, top + disc_rows + 1, c.w, len(stacked))
+            room = min(cx, cy * aspect)
+        glow = radius + max(1.0, min(0.6 * radius + 2, room - radius - 1))
+        self._moon_sky_cells(
+            c, top, rows, cx, cy, radius, glow, aspect, sky_state, (sky, text, lit, dark), text_box, moment
+        )
+        if side:
+            x0, y = text_box[0] + 1, text_box[1]
+            for line in chosen:
+                self._parts(c, y, x0, [(t, col, b) for t, col, b in line])
+                y += 1
+        else:
+            y = text_box[1]
+            for variants in stacked:
+                line = pick(variants, c.w - 4)
+                width = sum(text_width(t) for t, _, _ in line)
+                self._parts(c, y, max(1, (c.w - width) // 2), line)
+                y += 1
+
+    def _moon_sky_cells(
+        self,
+        c: Canvas,
+        top: int,
+        rows: int,
+        cx: float,
+        cy: float,
+        radius: float,
+        glow_r: float,
+        aspect: float,
+        state: MoonSky,
+        inks: tuple[RGB, RGB, RGB, RGB],
+        text_box: tuple[int, int, int, int],
+        moment: datetime,
+    ) -> None:
+        """Stars, then the glow and the disc as half-block pixels: two to a cell, so they come out square."""
+        sky, text, lit, dark = inks
+        key = ("face", moment.replace(second=0, microsecond=0), round(radius, 2), round(aspect, 3), lit, dark)
+        if key not in self._moon_cache:
+            self._moon_cache[key] = face(state, radius, lit, dark, aspect)
+        grid = self._moon_cache[key]
+        tall, size = len(grid), len(grid[0])
+        ox, oy = round(cx - size / 2), round(cy - tall / 2)
+        peak = 0.015 + 0.2 * state.lit  # the glow comes from the lit part, so a thin crescent barely has one
+        bx, by, bw, bh = text_box
+        for row in range(rows):
+            for col in range(c.w):
+                if bx <= col < bx + bw and by <= top + row < by + bh:
+                    continue
+                near_text = bx - 3 <= col < bx + bw + 2 and by - 1 <= top + row <= by + bh
+                pixels = []
+                for py in (2 * row, 2 * row + 1):
+                    d = math.hypot(col + 0.5 - (ox + size / 2), (py + 0.5 - (oy + tall / 2)) * aspect)
+                    colour = sky
+                    if d < glow_r:
+                        colour = mix(sky, lit, peak * (1 - max(0.0, d - radius) / (glow_r - radius)) ** 2)
+                    gy, gx = py - oy, col - ox
+                    if 0 <= gy < tall and 0 <= gx < size and grid[gy][gx] is not None:
+                        rgb, cover = grid[gy][gx]
+                        colour = mix(colour, rgb, cover)
+                    pixels.append(colour)
+                if pixels[0] != sky or pixels[1] != sky:
+                    c.put(top + row, col, "▀", pixels[0], pixels[1])
+                elif not near_text:
+                    h = (col * 73856093 ^ row * 19349663) & 0xFFFFFFFF
+                    if h % 89 < 2:  # a sparse, fixed star field
+                        bright = (h >> 8) % 7
+                        glyph = "•" if bright == 6 else "·"
+                        c.put(top + row, col, glyph, mix(sky, text, 0.22 + 0.09 * bright), sky)
+
+
+def _compass(azimuth: float) -> str:
+    points = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+    return points[round(azimuth / 22.5) % 16]

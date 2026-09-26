@@ -10,7 +10,7 @@ import re
 import textwrap
 import threading
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any
 
 from .climate import BASE_YEARS, Climate, Day, Normal
@@ -24,13 +24,14 @@ if TYPE_CHECKING:
     from .app import App, Loaded
 
 STATUS_SECONDS = 10
-VIEWS = ("week", "month", "chart", "climate", "heatmap")
+VIEWS = ("week", "month", "chart", "climate", "heatmap", "moon")
 LABELS = {
     "week": "Week",
     "month": "Month",
     "chart": "Chart",
     "climate": "Climate",
     "heatmap": "Heatmap",
+    "moon": "Moon",
 }
 SOURCE = {"H": "archive", "R": "recent model", "F": "forecast"}
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
@@ -118,6 +119,15 @@ def rank_detail(clim: Climate, d: date, high: float) -> tuple[str, str]:
     return f"only {join(listed)} {'was' if len(beaten) == 1 else 'were'} {word}", f"behind {join(names)}"
 
 
+def _zone(name: str | None) -> tzinfo:
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(name or "UTC")
+    except Exception:
+        return UTC
+
+
 class WeatherUI(Views):
     def __init__(self, app: App, loaded: Loaded, view: str | None = None):
         self.app = app
@@ -140,6 +150,9 @@ class WeatherUI(Views):
         self.compare: tuple[Any, Climate] | None = None
         self.help = False
         self.help_scroll = 0
+        self.zone = _zone(loaded.forecast.get("timezone") or self.place.timezone)
+        self.moon_hour: float | None = None  # None: live on today, 9 pm on other days
+        self._moon_cache: dict[tuple, Any] = {}
         self.jobs: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.status = " · ".join(loaded.notes)
         self.status_colour: RGB | None = self.pal.yellow if loaded.notes else None
@@ -510,6 +523,7 @@ class WeatherUI(Views):
                 "chart": [("↑↓", "day"), ("Enter", "history")],
                 "climate": [("←→", "month"), ("Tab", "view")],
                 "heatmap": [("↑↓", "year"), ("Enter", "open")],
+                "moon": [("←→", "day"), ("↑↓", "hour")],
             }
             return short[self.drill or self.view] + [("?", "help")]
         if self.drill == "years":
@@ -531,6 +545,7 @@ class WeatherUI(Views):
             "chart": [("↑↓", "day"), ("PgUp/Dn", "month"), ("Enter", "history"), ("r", "rain/temp")],
             "climate": [("←→", "month")],
             "heatmap": [("↑↓", "year"), ("←→", "month"), ("Enter", "open month")],
+            "moon": [("←→", "day"), ("↑↓", "hour"), ("g", "now")],
         }
         return per[self.view] + common
 
@@ -714,7 +729,7 @@ class WeatherUI(Views):
         pal = self.pal
         lines = [
             ("Views", ""),
-            ("Tab / Shift+Tab", "next / previous view (or 1–5)"),
+            ("Tab / Shift+Tab", "next / previous view (or 1–6)"),
             ("Enter", "this date across every year · again for that day"),
             ("Esc", "back · from a view, choose another place"),
             ("", ""),
@@ -723,6 +738,7 @@ class WeatherUI(Views):
             ("PgUp / PgDn", "previous / next month"),
             ("g or Home", "back to today"),
             (":", "go to any date, e.g. 14 Mar 1961"),
+            ("↑ ↓ in Moon", "move through the night an hour at a time"),
             ("", ""),
             ("Options", ""),
             ("r", "switch temperature / rain"),
@@ -741,6 +757,8 @@ class WeatherUI(Views):
             ("Data", ""),
             ("Open-Meteo", "weather data by Open-Meteo.com (CC BY 4.0)"),
             ("Copernicus", "contains modified Copernicus Climate Change Service information"),
+            ("Moon", "surface from USGS's Clementine 750 nm albedo mosaic (public domain)"),
+            ("", "positions after Meeus, Astronomical Algorithms"),
         ]
         w = c.w - 2 if c.compact else min(c.w - 4, 78)  # compact: full width, nothing peeks out beside it
         kx, dx = (4, 21) if c.compact else (4, 22)
@@ -821,7 +839,7 @@ class WeatherUI(Views):
             self.metric = "rain" if self.metric == "temp" else "temp"
             return None
         if key in ("g", "home"):
-            self.sel, self.drill, self.detail = self.today, None, None
+            self.sel, self.drill, self.detail, self.moon_hour = self.today, None, None, None
             self.heat_year = self.today.year
             return None
         if key == ":":
@@ -850,7 +868,7 @@ class WeatherUI(Views):
             i = VIEWS.index(self.view)
             self.view = VIEWS[(i + (1 if key == "tab" else -1)) % len(VIEWS)]
             return None
-        if key in "12345" and len(key) == 1:
+        if key in "123456" and len(key) == 1:
             self.view = VIEWS[int(key) - 1]
             return None
         return getattr(self, f"_keys_{self.view}")(key)
@@ -896,6 +914,26 @@ class WeatherUI(Views):
             self._move_month(-1)
         elif key in ("right", "l", "pgdn"):
             self._move_month(1)
+
+    def _keys_moon(self, key: str) -> None:
+        if key in ("left", "h", "right", "l"):
+            self._move(-1 if key in ("left", "h") else 1)
+        elif key in ("up", "k", "down", "j"):
+            now = self._moon_moment()
+            hour = (now.hour + now.minute / 60 if self.moon_hour is None else self.moon_hour) // 1
+            hour += -1 if key in ("up", "k") else 1
+            days, self.moon_hour = divmod(hour, 24)
+            self._move(int(days))
+        elif key in ("pgup", "pgdn"):
+            self._move(-7 if key == "pgup" else 7)
+
+    def _moon_moment(self) -> datetime:
+        """The moment the Moon view shows: now, or the selected day at the chosen hour (9 pm by default)."""
+        if self.moon_hour is None and self.sel == self.today:
+            return datetime.now(self.zone)
+        hour = 21.0 if self.moon_hour is None else self.moon_hour
+        start = datetime(self.sel.year, self.sel.month, self.sel.day, tzinfo=self.zone)
+        return start + timedelta(hours=hour)
 
     def _keys_heatmap(self, key: str) -> None:
         if key in ("up", "k"):
