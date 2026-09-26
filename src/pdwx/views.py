@@ -865,6 +865,8 @@ class Views:
         lit_pct = f"{round(sky_state.lit * 100)}% lit"
         compass = _compass(sky_state.azimuth)
         when = [(f"{on(moment)} · {clock(moment)}", amber, False)]
+        short_date = f"{moment.day} {moment:%b}" + (f" {moment.year}" if moment.year != self.today.year else "")
+        at = [] if live else [(clock(moment), amber, False), (" · ", dim, False)]
         if sky_state.altitude > 0:
             where = [
                 ("Up now" if live else "Up", amber if live else text, False),
@@ -893,15 +895,17 @@ class Views:
             [[(facts["name"], text, True)]],
             [[(f"{lit_pct} · {facts['age']:.1f} days old", dim, False)], [(lit_pct, dim, False)]],
             [],
-            *([] if live else [[when, [(clock(moment), amber, False)]]]),
+            # away from now the date gets a line of its own, so a narrow column never drops it
+            *([] if live else [[[(on(moment), amber, False)], [(short_date, amber, False)]]]),
             [
-                where,
+                at + where,
                 *(
-                    [where[:1] + [(f" · {sky_state.altitude:.0f}° {compass}", text, False)]]
+                    [at + where[:1] + [(f" · {sky_state.altitude:.0f}° {compass}", text, False)]]
                     if sky_state.altitude > 0
                     else []
                 ),
-                where[:1],
+                at + where[:1],
+                at,
             ],
             [rise, rise[:1] + rise[2:]],
             [sett, sett[:1] + sett[2:]],
@@ -938,7 +942,11 @@ class Views:
         # stacked: the disc above a few centred lines
         stacked = [
             [[(facts["name"], text, True), (f"  {lit_pct}", dim, False)], [(facts["name"], text, True)]],
-            [when + [(" · ", dim, False), *where], where] if not live else [where, where[:1]],
+            (
+                [when + [(" · ", dim, False), *where], when, [(short_date, amber, False)]]
+                if not live
+                else [where, where[:1]]
+            ),
             [
                 rise + [("   ", None, False), *sett],
                 [
