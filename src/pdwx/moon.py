@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import struct
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from functools import cache
 from pathlib import Path
@@ -196,6 +196,7 @@ class MoonSky:
     axis: float  # screen bearing of the Moon's north pole
     lib_lon: float  # optical libration: the selenographic point facing the observer
     lib_lat: float
+    parallactic: float  # how far celestial north is turned from the observer's straight up
 
 
 def elongation(moment: datetime) -> float:
@@ -238,6 +239,7 @@ def moon_sky(moment: datetime, latitude: float, longitude: float) -> MoonSky:
         distance=dist,
         limb=(parallactic - limb_pa) % 360,
         axis=(parallactic - axis_pa) % 360,
+        parallactic=parallactic,
         lib_lon=lib_lon,
         lib_lat=lib_lat,
     )
@@ -257,21 +259,58 @@ def _crossing(fn, t0: datetime, t1: datetime) -> datetime:
     return t0 + (t1 - t0) / 2
 
 
+def _above_horizon(moment: datetime, latitude: float, longitude: float) -> float:
+    """Degrees the Moon's upper limb stands above the horizon, refraction included (Meeus ch. 15).
+
+    The limb meets the horizon when the centre's geocentric altitude is 0.7275 × parallax − 34′.
+    """
+    jd = julian_day(moment)
+    t = (jd - 2451545.0) / 36525
+    dpsi, eps = _nutation(t)
+    lon, lat, dist, _f, _node = _moon(t)
+    ra, dec = _equatorial((lon + dpsi) % 360, lat, eps)
+    theta0 = 280.46061837 + 360.98564736629 * (jd - 2451545.0)
+    hour = (theta0 + longitude - ra) % 360
+    alt = _asin(_sin(latitude) * _sin(dec) + _cos(latitude) * _cos(dec) * _cos(hour))
+    return alt - (0.7275 * _asin(EARTH_RADIUS / dist) - 0.5667)
+
+
+def _horizon(moment: datetime, latitude: float, longitude: float, direction: int) -> datetime | None:
+    """The first moonrise or moonset after (direction 1) or before (−1) a moment, within a day."""
+    step = timedelta(minutes=10) * direction
+    t0, v0 = moment, _above_horizon(moment, latitude, longitude)
+    for _ in range(144):
+        t1 = t0 + step
+        v1 = _above_horizon(t1, latitude, longitude)
+        if (v0 < 0) != (v1 < 0):
+            return _crossing(lambda t: _above_horizon(t, latitude, longitude), *sorted((t0, t1)))
+        t0, v0 = t1, v1
+    return None
+
+
+def as_seen_below(sky: MoonSky, moment: datetime, latitude: float, longitude: float) -> MoonSky:
+    """A Moon that is down, turned smoothly from the way it set to the way it will rise.
+
+    Passing beneath the observer, the parallactic angle can swing 100° in an hour. Nobody sees that,
+    so the picture keeps the Moon's phase and face for this moment but eases its tilt from the last
+    moonset to the next moonrise, which is continuous with the real Moon at both ends.
+    """
+    set_at, rise_at = _horizon(moment, latitude, longitude, -1), _horizon(moment, latitude, longitude, 1)
+    if not set_at or not rise_at:
+        return sky
+    q_set = moon_sky(set_at, latitude, longitude).parallactic
+    q_rise = moon_sky(rise_at, latitude, longitude).parallactic
+    f = (moment - set_at) / (rise_at - set_at)
+    q = q_set + ((q_rise - q_set + 180) % 360 - 180) * f
+    turn = q - sky.parallactic
+    return replace(sky, limb=(sky.limb + turn) % 360, axis=(sky.axis + turn) % 360, parallactic=q)
+
+
 def rise_set(day: date, zone: tzinfo, latitude: float, longitude: float) -> tuple[datetime | None, datetime | None]:
     """Moonrise and moonset on one local calendar day; either can be missing, as it is once a month."""
 
     def above(moment: datetime) -> float:
-        # the upper limb meets the horizon with refraction when the centre's geocentric altitude
-        # is 0.7275 × parallax − 34′ (Meeus ch. 15)
-        jd = julian_day(moment)
-        t = (jd - 2451545.0) / 36525
-        dpsi, eps = _nutation(t)
-        lon, lat, dist, _f, _node = _moon(t)
-        ra, dec = _equatorial((lon + dpsi) % 360, lat, eps)
-        theta0 = 280.46061837 + 360.98564736629 * (jd - 2451545.0)
-        hour = (theta0 + longitude - ra) % 360
-        alt = _asin(_sin(latitude) * _sin(dec) + _cos(latitude) * _cos(dec) * _cos(hour))
-        return alt - (0.7275 * _asin(EARTH_RADIUS / dist) - 0.5667)
+        return _above_horizon(moment, latitude, longitude)
 
     start = datetime(day.year, day.month, day.day, tzinfo=zone)
     end = start + timedelta(days=1)

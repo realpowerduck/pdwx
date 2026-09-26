@@ -86,6 +86,28 @@ class PositionTests(unittest.TestCase):
             )
             self.assertLess(angle_gap(rising.axis, expect), 35, (lat, rising.axis))
 
+    def test_below_the_horizon_it_turns_smoothly_from_set_to_rise(self):
+        """Passing beneath the observer the real angle swings ~100° an hour; the drawing must not."""
+        lat, lon = CAPE_TOWN
+        zone = timezone(timedelta(hours=2))
+        set_at = moon.moon_sky(datetime(2026, 10, 4, 12, tzinfo=zone), lat, lon)  # up at noon, sets after
+        rise, _ = moon.rise_set(date(2026, 10, 5), zone, lat, lon)
+        _, sett = moon.rise_set(date(2026, 10, 4), zone, lat, lon)
+        self.assertGreater(set_at.altitude, 0)
+        drawn, swing, t = [], 0.0, sett + timedelta(minutes=5)
+        while t < rise:
+            sky = moon.moon_sky(t, lat, lon)
+            self.assertLess(sky.altitude, 0)
+            drawn.append(moon.as_seen_below(sky, t, lat, lon).axis)
+            swing = max(swing, angle_gap(sky.axis, moon.moon_sky(t + timedelta(minutes=30), lat, lon).axis))
+            t += timedelta(minutes=30)
+        self.assertGreater(swing, 25)  # the raw angle really does swing
+        for a, b in zip(drawn, drawn[1:], strict=False):
+            self.assertLess(angle_gap(a, b), 12)  # at most ~1/12 of the set-to-rise turn per half hour
+        # and it meets the real Moon at both horizons
+        self.assertLess(angle_gap(drawn[0], moon.moon_sky(sett, lat, lon).axis), 3)
+        self.assertLess(angle_gap(drawn[-1], moon.moon_sky(rise, lat, lon).axis), 12)
+
 
 class FaceTests(unittest.TestCase):
     def sky(self, lit_towards: float, phase_angle: float) -> moon.MoonSky:
@@ -100,6 +122,7 @@ class FaceTests(unittest.TestCase):
             axis=0,
             lib_lon=0,
             lib_lat=0,
+            parallactic=0,
         )
 
     def brightness(self, grid) -> list[list[float]]:

@@ -12,7 +12,7 @@ from .style import day_month, deg, deg1, delta, delta1, full_date, icon_colour, 
 from .style import rain as rain_text
 from .style import snow as snow_text
 from .style import wind as wind_text
-from .moon import MoonSky, face, moon_sky, next_phase, phase_name, rise_set
+from .moon import MoonSky, as_seen_below, face, moon_sky, next_phase, phase_name, rise_set
 from .term import RGB, Canvas, clip, ink_for, luminance, mix, text_width
 from .weather_data import condition
 
@@ -810,8 +810,11 @@ class Views:
             lat, lon = self.place.latitude, self.place.longitude
             day = moment.date()
             rise, sett = rise_set(day, self.zone, lat, lon)
+            sky = moon_sky(moment, lat, lon)
+            if sky.altitude < 0:  # nobody sees it turn beneath them: ease from its set to its rise
+                sky = as_seen_below(sky, moment, lat, lon)
             self._moon_cache[key] = {
-                "sky": moon_sky(moment, lat, lon),
+                "sky": sky,
                 "name": phase_name(day, self.zone),
                 "rise": rise,
                 "set": sett,
@@ -893,7 +896,11 @@ class Views:
             *([] if live else [[when, [(clock(moment), amber, False)]]]),
             [
                 where,
-                *([where[:1] + [(f" · {sky_state.altitude:.0f}° {compass}", text, False)]] if len(where) > 1 else []),
+                *(
+                    [where[:1] + [(f" · {sky_state.altitude:.0f}° {compass}", text, False)]]
+                    if sky_state.altitude > 0
+                    else []
+                ),
                 where[:1],
             ],
             [rise, rise[:1] + rise[2:]],
