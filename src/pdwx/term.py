@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import platform
 import re
 import select
 import signal
@@ -131,10 +132,23 @@ def _to_256(c: RGB) -> int:
     return 232 + grey if d_grey < d_cube else cube
 
 
+def _apple_terminal_truecolor() -> bool:
+    """Recognize Terminal.app's 24-bit SGR support on macOS 26+ when env hints omit it."""
+    if sys.platform != "darwin" or os.environ.get("TERM_PROGRAM") != "Apple_Terminal":
+        return False
+    if os.environ.get("TERM", "").startswith(("screen", "tmux")):
+        return False
+    try:
+        return int(platform.mac_ver()[0].split(".", 1)[0]) >= 26
+    except (ValueError, IndexError):
+        return False
+
+
 TRUECOLOR = (
     os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
     or any(name in os.environ.get("TERM", "") for name in ("ghostty", "kitty", "alacritty", "foot", "wezterm"))
     or os.environ.get("PDWX_TRUECOLOR") == "1"
+    or _apple_terminal_truecolor()
 )
 
 
